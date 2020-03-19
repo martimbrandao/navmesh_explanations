@@ -2,6 +2,7 @@
 
 import networkx as nx
 import numpy as np
+import time
 import pdb
 import rospy
 from geometry_msgs.msg import Point
@@ -72,8 +73,9 @@ if __name__ == "__main__":
 
   # ros init
   rospy.init_node('test_recast_explanations')
-  pubPath = rospy.Publisher('gpath', Marker, queue_size=10)
   pubGraph = rospy.Publisher('graph', MarkerArray, queue_size=10)
+  pubPath = rospy.Publisher('graph_path', Marker, queue_size=10)
+  pubKPaths = rospy.Publisher('graph_kpaths', Marker, queue_size=10)
 
   rospy.loginfo('Waiting for recast_ros...')
   rospy.wait_for_service('/recast_node/plan_path')
@@ -160,10 +162,13 @@ if __name__ == "__main__":
       rospy.loginfo('total cost = ' + str(totalcost))
 
     # k-shortest paths
-    #rospy.loginfo('Solving k-shortest paths on our local graph...')
-    #kpaths = list(islice(nx.shortest_simple_paths(G, rospath_ids[0], rospath_ids[-1], weight="weight"), 10))
-    #for path in kpaths:
-    #  rospy.loginfo('path = ' + str(path))
+    if False:
+      rospy.loginfo('Solving k-shortest paths on our local graph...')
+      time1 = time.clock()
+      kpaths = list(islice(nx.shortest_simple_paths(G, pstart, pgoal, weight="weight"), 5))
+      rospy.loginfo('... elapsed time: ' + str(time.clock()-time1))
+    else:
+      kpaths = []
 
     # visualize our graph
     rospy.loginfo('Visualizing our graph...')
@@ -323,7 +328,35 @@ if __name__ == "__main__":
     if pubPath.get_num_connections() > 0:
       pubPath.publish(marker)
 
-
+    # visualize graph K paths
+    if len(kpaths) > 0:
+      rospy.loginfo('Visualizing our k-shortest paths...')
+      marker = Marker()
+      marker.header.frame_id = 'map'
+      marker.header.stamp = rospy.Time.now()
+      marker.id = 0
+      marker.action = Marker.ADD
+      marker.scale.x = 0.1
+      marker.type = Marker.LINE_LIST
+      marker.color.r = 1
+      marker.color.g = 1
+      marker.color.b = 1
+      marker.color.a = 0.8
+      marker.pose.orientation.w = 1
+      for path in kpaths:
+        for i in range(len(path)-1):
+          p1 = Point()
+          p1.x = N[path[i  ]]["point"].x
+          p1.y = N[path[i  ]]["point"].y
+          p1.z = N[path[i  ]]["point"].z + 0.9
+          marker.points.append(p1)
+          p2 = Point()
+          p2.x = N[path[i+1]]["point"].x
+          p2.y = N[path[i+1]]["point"].y
+          p2.z = N[path[i+1]]["point"].z + 0.9
+          marker.points.append(p2)
+      if pubKPaths.get_num_connections() > 0:
+        pubKPaths.publish(marker)
 
 
 
