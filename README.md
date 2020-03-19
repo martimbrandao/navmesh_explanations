@@ -19,12 +19,12 @@ Modeling:
 - python gurobipy
 
 TODO:
-x navmesh topic graph
-x python ros getgraph
-x python convert to networkx
-x networkx get shortest path, compare
-x networkx get k shortest paths
-- ros show k shortest paths
-- gurobipy solve inverse shortest path (with A only or k-shortest-paths also as constraints)
-- reformulate so that paths not constraints but costs?
+- [x] navmesh topic graph
+- [x] python ros getgraph
+- [x] python convert to networkx
+- [x] networkx get shortest path, compare
+- [x] networkx get k shortest paths
+- [ ] ros show k shortest paths
+- [ ] gurobipy solve inverse shortest path (with A only or k-shortest-paths also as constraints)
+- [ ] reformulate so that paths not constraints but costs?
 
