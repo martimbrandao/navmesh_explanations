@@ -68,6 +68,8 @@ def dist(p1, p2):
 
 if __name__ == "__main__":
 
+  debug = False
+
   # ros init
   rospy.init_node('test_recast_explanations')
   pubPath = rospy.Publisher('gpath', Marker, queue_size=10)
@@ -82,26 +84,35 @@ if __name__ == "__main__":
   while not rospy.is_shutdown():
     rate.sleep()
 
+    rospy.loginfo('=======================================================')
+
     # get area costs
     rospy.loginfo('Getting area costs...')
     areaCosts = [0]
     for i in range(1,20):
       areaCosts.append( rospy.get_param('/recast_node/TERRAIN_TYPE' + str(i) + '_COST') )
-    rospy.loginfo('area costs = ' + str(areaCosts))
+    if debug:
+      rospy.loginfo('area costs = ' + str(areaCosts))
 
     # get graph
     rospy.loginfo('Getting graph...')
     rosgraph = rospy.wait_for_message('/recast_node/graph', RecastGraph)
-
-    rospy.loginfo('nodes = ' + str(len(rosgraph.nodes)) + ' portals = ' + str(len(rosgraph.portals)))
+    if debug:
+      rospy.loginfo('nodes = ' + str(len(rosgraph.nodes)) + ' portals = ' + str(len(rosgraph.portals)))
 
     # networkx graph
+    Gdirect = nx.Graph()
     G = nx.Graph()
     N = {}
     for i in range(0, len(rosgraph.nodes), 2):
       # get edge
       k1, data1 = addNode(rosgraph.nodes[i  ], areaCosts, N)
       k2, data2 = addNode(rosgraph.nodes[i+1], areaCosts, N)
+      # check whether already connected (not to have repeated edges)
+      if k1 in Gdirect and k2 in Gdirect[k1]:
+        continue
+      else:
+        Gdirect.add_edge(k1,k2)
       # get edge midpoint (portal point)
       km, datam = addPortal(rosgraph.portals[i/2], N)
       # add two edges (1 to midpoint, midpoint to 2)
@@ -127,24 +138,26 @@ if __name__ == "__main__":
     pgoal = getKey(rospath_centers[-1])
 
     # debug
-    rospy.loginfo('start    = \n' + str(rospath_centers[0]))
-    rospy.loginfo('goal     = \n' + str(rospath_centers[-1]))
-    rospy.loginfo('my start = \n' + str(pstart))
-    rospy.loginfo('my goal  = \n' + str(pgoal))
+    if debug:
+      rospy.loginfo('start    = \n' + str(rospath_centers[0]))
+      rospy.loginfo('goal     = \n' + str(rospath_centers[-1]))
+      rospy.loginfo('my start = \n' + str(pstart))
+      rospy.loginfo('my goal  = \n' + str(pgoal))
 
     # path on graph
     rospy.loginfo('Solving shortest path on our local graph...')
     gpath = nx.shortest_path(G, source=pstart, target=pgoal, weight="weight")
 
     # path stats
-    for k in gpath:
-      rospy.loginfo('area = ' + str(N[k]["area"]) + ' cost = ' + str(N[k]["cost"]))
-    totalcost = 0
-    for i in range(len(gpath)-1):
-      cost = G[gpath[i]][gpath[i+1]]['weight']
-      rospy.loginfo(str(cost))
-      totalcost += cost
-    rospy.loginfo('total cost = ' + str(totalcost))
+    if debug:
+      for k in gpath:
+        rospy.loginfo('area = ' + str(N[k]["area"]) + ' cost = ' + str(N[k]["cost"]))
+      totalcost = 0
+      for i in range(len(gpath)-1):
+        cost = G[gpath[i]][gpath[i+1]]['weight']
+        rospy.loginfo(str(cost))
+        totalcost += cost
+      rospy.loginfo('total cost = ' + str(totalcost))
 
     # k-shortest paths
     #rospy.loginfo('Solving k-shortest paths on our local graph...')
