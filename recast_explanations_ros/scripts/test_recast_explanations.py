@@ -75,6 +75,7 @@ if __name__ == "__main__":
   rospy.init_node('test_recast_explanations')
   pubGraph = rospy.Publisher('graph', MarkerArray, queue_size=10)
   pubPath = rospy.Publisher('graph_path', Marker, queue_size=10)
+  pubPathDesired = rospy.Publisher('graph_path_desired', Marker, queue_size=10)
   pubKPaths = rospy.Publisher('graph_kpaths', Marker, queue_size=10)
 
   rospy.loginfo('Waiting for recast_ros...')
@@ -169,6 +170,10 @@ if __name__ == "__main__":
       rospy.loginfo('... elapsed time: ' + str(time.clock()-time1))
     else:
       kpaths = []
+
+    # desired path on graph
+    rospy.loginfo('Solving shortest-hop ("desired") path on our local graph...')
+    gpath_desired = nx.shortest_path(G, source=pstart, target=pgoal)
 
     # visualize our graph
     rospy.loginfo('Visualizing our graph...')
@@ -358,6 +363,33 @@ if __name__ == "__main__":
       if pubKPaths.get_num_connections() > 0:
         pubKPaths.publish(marker)
 
+    # visualize desired graph path
+    rospy.loginfo('Visualizing our desired path...')
+    marker = Marker()
+    marker.header.frame_id = 'map'
+    marker.header.stamp = rospy.Time.now()
+    marker.id = 0
+    marker.action = Marker.ADD
+    marker.scale.x = 0.1
+    marker.type = Marker.LINE_LIST
+    marker.color.r = 0
+    marker.color.g = 1
+    marker.color.b = 0
+    marker.color.a = 1
+    marker.pose.orientation.w = 1
+    for i in range(len(gpath_desired)-1):
+      p1 = Point()
+      p1.x = N[gpath_desired[i  ]]["point"].x
+      p1.y = N[gpath_desired[i  ]]["point"].y
+      p1.z = N[gpath_desired[i  ]]["point"].z + 1
+      marker.points.append(p1)
+      p2 = Point()
+      p2.x = N[gpath_desired[i+1]]["point"].x
+      p2.y = N[gpath_desired[i+1]]["point"].y
+      p2.z = N[gpath_desired[i+1]]["point"].z + 1
+      marker.points.append(p2)
+    if pubPathDesired.get_num_connections() > 0:
+      pubPathDesired.publish(marker)
 
 
 
