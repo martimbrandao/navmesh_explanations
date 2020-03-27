@@ -1,7 +1,8 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import networkx as nx
 import numpy as np
+import cvxpy as cp
 import time
 import pdb
 import rospy
@@ -19,7 +20,7 @@ def getProj(point):
     query = RecastProjectSrvRequest()
     query.point = point
     proj = srv(query)
-  except rospy.ServiceException, e:
+  except rospy.ServiceException:
     rospy.logerr('could not project point')
     exit()
   return proj
@@ -64,6 +65,233 @@ def copyDict(dict1, dict2):
 
 def dist(p1, p2):
   return np.linalg.norm(np.array([p2.x, p2.y, p2.z]) - np.array([p1.x, p1.y, p1.z]))
+
+### optimization
+
+def optAreaCosts(graph, areaCosts, desiredPath, badPaths):
+  # variable:     ac = areaCosts                                                  # vector of all area-label costs (float)
+  # cost:         (ac-areaCosts)^2
+  # constraints:  sum_(j in B) dist_j * ac_j - sum_(j in S_i) dist_j * ac_j <= 0  # for all bad paths S_i
+  #               ac_i >= 0                                                       # for all i
+
+  # path cost constraints
+  G = []
+  h = []
+  for path in badPaths:
+    line = [0]*len(areaCosts)
+    # sum_(j in B) dist_j * ac_j
+    for i in range(len(desiredPath)-1):
+      d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
+      if graph.nodes[desiredPath[i]]["portal"] == False:
+        line[ graph.nodes[desiredPath[i]]["area"] ] += d
+      elif graph.nodes[desiredPath[i+1]]["portal"] == False:
+        line[ graph.nodes[desiredPath[i+1]]["area"] ] += d
+    # - sum_(j in S_i) dist_j * ac_j
+    for i in range(len(path)-1):
+      d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
+      if graph.nodes[path[i]]["portal"] == False:
+        line[ graph.nodes[path[i]]["area"] ] -= d
+      elif graph.nodes[path[i+1]]["portal"] == False:
+        line[ graph.nodes[path[i+1]]["area"] ] -= d
+    G.append(line)
+    h.append(0)
+  G = np.array(G)
+  h = np.array(h)
+
+  # solve with cvxpy
+  x = cp.Variable(len(areaCosts))
+  cost = cp.sum_squares(x - np.array(areaCosts))
+  prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, x >= 0])
+  prob.solve()
+  newAreaCosts = x.value
+
+  # new graph
+  newGraph = graph.copy()
+  for node in newGraph:
+    if newGraph.nodes[node]["area"] != -1:
+      newGraph.nodes[node]["cost"] = newAreaCosts[ newGraph.nodes[node]["area"] ]
+  for edge in list(newGraph.edges):
+    if newGraph.nodes[edge[0]]["area"] != -1:
+      area = newGraph.nodes[edge[0]]["area"]
+    else:
+      area = newGraph.nodes[edge[1]]["area"]
+    newGraph[edge[0]][edge[1]]["weight"] = newAreaCosts[area] * dist(newGraph.nodes[edge[0]]["point"], newGraph.nodes[edge[1]]["point"])
+  return x.value, newGraph
+
+def optPolyCosts(graph, desiredPath, badPaths):
+  # variable:     nc = nodeCosts                                                  # vector of all node costs (float)
+  # cost:         (nc-nodeCosts)^2
+  # constraints:  sum_(j in B) dist_j * nc_j - sum_(j in S_i) dist_j * nc_j <= 0  # for all paths S_i
+  #               nc_i >= 0                                                       # for all i
+
+  # define variable
+  nodeCosts = np.array([0] * len(graph.nodes))
+  for node in graph.nodes:
+    nodeCosts[ graph.nodes[node]["id"] ] = graph.nodes[node]["cost"]
+
+  # path cost constraints
+  G = []
+  h = []
+  for path in badPaths:
+    line = [0]*len(nodeCosts)
+    # sum_(j in B) dist_j * nc_j
+    for i in range(len(desiredPath)-1):
+      d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
+      if graph.nodes[desiredPath[i]]["portal"] == False:
+        line[ graph.nodes[desiredPath[i]]["id"] ] += d
+      elif graph.nodes[desiredPath[i+1]]["portal"] == False:
+        line[ graph.nodes[desiredPath[i+1]]["id"] ] += d
+    # - sum_(j in S_i) dist_j * nc_j
+    for i in range(len(path)-1):
+      d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
+      if graph.nodes[path[i]]["portal"] == False:
+        line[ graph.nodes[path[i]]["id"] ] -= d
+      elif graph.nodes[path[i+1]]["portal"] == False:
+        line[ graph.nodes[path[i+1]]["id"] ] -= d
+    G.append(line)
+    h.append(0)
+  G = np.array(G)
+  h = np.array(h)
+
+  # solve with cvxpy
+  x = cp.Variable(len(graph.nodes))
+  cost = cp.sum_squares(x - np.array(nodeCosts))
+  prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, x >= 0])
+  prob.solve()
+  newPolyCosts = x.value
+
+  # new graph
+  newGraph = graph.copy()
+  for node in newGraph:
+    newGraph.nodes[node]["cost"] = newPolyCosts[ newGraph.nodes[node]["id"] ]
+  for edge in list(newGraph.edges):
+    if newGraph.nodes[edge[0]]["cost"] != -1:
+      cost = newGraph.nodes[edge[0]]["cost"]
+    else:
+      cost = newGraph.nodes[edge[1]]["cost"]
+    newGraph[edge[0]][edge[1]]["weight"] = cost * dist(newGraph.nodes[edge[0]]["point"], newGraph.nodes[edge[1]]["point"])
+  return x.value, newGraph
+
+def optPolyLabelsApproxFromCosts(graph, areaCosts, allowedAreaTypes, desiredPath, badPaths):
+  # get optimal node costs
+  nodeCosts,tmpGraph = optPolyCosts(graph, desiredPath, badPaths)
+
+  # infer each node's area-type from cost
+  newPolyLabels = [0]*len(graph.nodes)
+  newGraph = graph.copy()
+  for node in graph.nodes:
+    area = graph.nodes[node]["area"]
+    cost = nodeCosts[ graph.nodes[node]["id"] ]
+    # if cost has changed then choose area type with closest cost
+    if cost != graph.nodes[node]["cost"]:
+      bestArea = -1
+      bestDist = float('inf')
+      for a in allowedAreaTypes:
+        if a == area:
+          continue
+        d = abs(cost - areaCosts[a])
+        if d < bestDist:
+          bestDist = d
+          bestArea = a
+      newGraph.nodes[node]["area"] = bestArea
+      newPolyLabels[ newGraph.nodes[node]["id"] ] = bestArea
+    else:
+      newPolyLabels[ newGraph.nodes[node]["id"] ] = cost
+  return newPolyLabels, newGraph
+
+def optPolyLabels(graph, areaCosts, desiredPath, badPaths):
+  # variable:     l = nodeLabelsHotEnc                                      # vector of all node area-labels using one-hot encoding (bool)
+  # cost:         (l-nodeLabelsHotEnc)^2
+  # constraints:  edgeCost_i = dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1    # for all edges i
+  #               sum_(j in B) edgeCost_j - sum_(j in S_i) edgeCost_j <= 0  # for all paths S_i
+  #               l_i + l_(i+1) = 1                                         # each node can have only one 1
+
+  # define variable
+  nodeLabelsHotEnc = np.array([0] * len(graph.nodes)*2)
+  for node in graph.nodes:
+    if graph.nodes[node]["area"] == -1:
+      continue
+    elif graph.nodes[node]["area"] == 1:
+      nodeLabelsHotEnc[ graph.nodes[node]["id"]*2   ] = 1
+    elif graph.nodes[node]["area"] == 2:
+      nodeLabelsHotEnc[ graph.nodes[node]["id"]*2+1 ] = 1
+    else:
+      print("ERROR: unexpected value")
+      return []
+
+  # path cost constraints
+  G = []
+  h = []
+  for path in badPaths:
+    line = [0]*len(nodeLabelsHotEnc)
+    # sum_(j in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
+    for i in range(len(desiredPath)-1):
+      d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
+      if graph.nodes[desiredPath[i]]["portal"] == False:
+        line[ graph.nodes[desiredPath[i]]["id"]*2   ] += d * areaCosts[1]
+        line[ graph.nodes[desiredPath[i]]["id"]*2+1 ] += d * areaCosts[2]
+      elif graph.nodes[desiredPath[i+1]]["portal"] == False:
+        line[ graph.nodes[desiredPath[i+1]]["id"]*2   ] += d * areaCosts[1]
+        line[ graph.nodes[desiredPath[i+1]]["id"]*2+1 ] += d * areaCosts[2]
+    # - sum_(j in S_i) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
+    for i in range(len(path)-1):
+      d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
+      if graph.nodes[path[i]]["portal"] == False:
+        line[ graph.nodes[path[i]]["id"]*2   ] -= d * areaCosts[1]
+        line[ graph.nodes[path[i]]["id"]*2+1 ] -= d * areaCosts[2]
+      elif graph.nodes[path[i+1]]["portal"] == False:
+        line[ graph.nodes[path[i+1]]["id"]*2   ] -= d * areaCosts[1]
+        line[ graph.nodes[path[i+1]]["id"]*2+1 ] -= d * areaCosts[2]
+    G.append(line)
+    h.append(0)
+  G = np.array(G)
+  h = np.array(h)
+
+  # single active label per node
+  A = []
+  b = []
+  for i in range(len(graph.nodes)):
+    line = [0]*len(nodeLabelsHotEnc)
+    line[2*i  ] = 1
+    line[2*i+1] = 1
+    A.append(line)
+    b.append(1)
+  A = np.array(A)
+  b = np.array(b)
+
+  # solve with cvxpy
+  x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
+  cost = cp.sum_squares(x - np.array(nodeLabelsHotEnc))
+  prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, A @ x == b])
+  prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={"MSK_DPAR_MIO_MAX_TIME":600})
+
+  # get new poly labels and graph
+  newPolyLabels = [0]*len(graph.nodes)
+  newGraph = graph.copy()
+  for i in range(len(newGraph.nodes)):
+    if x.value[i*2]:
+      area = 1
+    elif x.value[i*2+1]:
+      area = 2
+    else:
+      area = -1
+    newPolyLabels[i] = area
+    for node in newGraph:
+      if newGraph.nodes[node]["id"] == i:
+        if newGraph.nodes[node]["area"] != -1:
+          if area == -1:
+            print("WARNING: new area -1 but original is not...")
+            pdb.set_trace()
+          newGraph.nodes[node]["area"] = area
+          newGraph.nodes[node]["cost"] = areaCosts[area]
+        break
+  for edge in list(newGraph.edges):
+    if newGraph.nodes[edge[0]]["cost"] != -1:
+      cost = newGraph.nodes[edge[0]]["cost"]
+    else:
+      cost = newGraph.nodes[edge[1]]["cost"]
+    newGraph[edge[0]][edge[1]]["weight"] = cost * dist(newGraph.nodes[edge[0]]["point"], newGraph.nodes[edge[1]]["point"])
+  return newPolyLabels, newGraph
 
 ### main
 
@@ -117,7 +345,7 @@ if __name__ == "__main__":
       else:
         Gdirect.add_edge(k1,k2)
       # get edge midpoint (portal point)
-      km, datam = addPortal(rosgraph.portals[i/2], N)
+      km, datam = addPortal(rosgraph.portals[int(i/2)], N)
       # add two edges (1 to midpoint, midpoint to 2)
       cost1 = data1["cost"] * dist(data1["point"], datam["point"])
       cost2 = data2["cost"] * dist(datam["point"], data2["point"])
@@ -132,7 +360,8 @@ if __name__ == "__main__":
     rospy.loginfo('Getting path...')
     rospath = rospy.wait_for_message('/recast_node/recast_path_lines', Marker)
     rospath_centers = []
-    for i in range(0, len(rospath.points), 2) + [len(rospath.points)-1]:
+    #for i in range(0, len(rospath.points), 2) + [len(rospath.points)-1]:
+    for i in list(range(0, len(rospath.points), 2)) + [len(rospath.points)-1]:
       proj = getProj(rospath.points[i])
       rospath_centers.append(proj.projected_polygon_center)
 
@@ -163,7 +392,7 @@ if __name__ == "__main__":
       rospy.loginfo('total cost = ' + str(totalcost))
 
     # k-shortest paths
-    if False:
+    if True:
       rospy.loginfo('Solving k-shortest paths on our local graph...')
       time1 = time.clock()
       kpaths = list(islice(nx.shortest_simple_paths(G, pstart, pgoal, weight="weight"), 5))
@@ -174,6 +403,25 @@ if __name__ == "__main__":
     # desired path on graph
     rospy.loginfo('Solving shortest-hop ("desired") path on our local graph...')
     gpath_desired = nx.shortest_path(G, source=pstart, target=pgoal)
+
+    # inverse shortest path
+    if True:
+      # optAreaCosts
+      print("Computing optAreaCosts...")
+      x1, G1 = optAreaCosts(G, areaCosts, gpath_desired, kpaths)
+      print(x1)
+      # optPolyCosts
+      print("Computing optPolyCosts...")
+      x2, G2 = optPolyCosts(G, gpath_desired, kpaths)
+      print(x2)
+      # optPolyLabelsApproxFromCosts
+      print("Computing optPolyLabelsApproxFromCosts...")
+      x3, G3 = optPolyLabelsApproxFromCosts(G, areaCosts, [1,2], gpath_desired, kpaths)
+      print(x3)
+      # optPolyLabels
+      print("Computing optPolyLabels...")
+      x4, G4 = optPolyLabels(G, areaCosts, gpath_desired, kpaths)
+      print(x4)
 
     # visualize our graph
     rospy.loginfo('Visualizing our graph...')

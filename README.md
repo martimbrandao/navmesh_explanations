@@ -16,7 +16,7 @@ Could potentially add:
 
 Modeling:
 - python networkX (shortest_simple_paths, betweenness, closeness, etc.)
-- python gurobipy
+- python gurobipy cvxpy
 
 TODO:
 - [x] navmesh topic graph
@@ -25,6 +25,21 @@ TODO:
 - [x] networkx get shortest path, compare
 - [x] networkx get k shortest paths
 - [x] ros show k shortest paths
-- [ ] gurobipy solve inverse shortest path (with A only or k-shortest-paths also as constraints)
+- [x] cvxpy solve inverse shortest path (with k-shortest-paths as constraints)
+- [x] cvxpy optPolyLabels from optPolyCosts (e.g. for each node choose areatype except current that has closest cost to that in x)
+- [ ] cvxpy optPolyLabels with path nodes only as variables (might have to iterate)
+- [ ] rviz show cvxpy solutions
+- [ ] rviz compare norm2 to norm1
+- [ ] evaluate influence of k in k-shortest paths
+- [ ] compare k-shortest paths to 1) random-walks and 2) incrementally adding new shortest path
 - [ ] reformulate so that paths not constraints but costs?
+
+## Requirements
+
+This package uses python3 (for cvxpy).
+
+```
+sudo apt install python3-pip
+pip3 install rospkg networkx cvxpy cvxopt
+```
 
