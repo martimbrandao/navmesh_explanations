@@ -66,6 +66,76 @@ def copyDict(dict1, dict2):
 def dist(p1, p2):
   return np.linalg.norm(np.array([p2.x, p2.y, p2.z]) - np.array([p1.x, p1.y, p1.z]))
 
+def newPoint(point, height):
+  newpoint = Point()
+  newpoint.x = point.x
+  newpoint.y = point.y
+  newpoint.z = point.z + height
+  return newpoint
+
+def newMarker(id, type, scale, color):
+  marker = Marker()
+  marker.header.frame_id = 'map'
+  marker.header.stamp = rospy.Time.now()
+  marker.id = id
+  marker.action = Marker.ADD
+  marker.scale.x = scale
+  if type != Marker.LINE_LIST:
+    marker.scale.y = scale
+    marker.scale.z = scale
+  marker.type = type
+  marker.color.r = color[0]
+  marker.color.g = color[1]
+  marker.color.b = color[2]
+  marker.color.a = color[3]
+  marker.pose.orientation.w = 1
+  return marker
+
+def pathToMarker(graph, path, id, color, height):
+  marker = newMarker(id, Marker.LINE_LIST, 0.1, color)
+  for i in range(len(path)-1):
+    marker.points.append(newPoint(graph.nodes[path[i  ]]["point"], height))
+    marker.points.append(newPoint(graph.nodes[path[i+1]]["point"], height))
+  return marker
+
+def pathsToMarkerArray(graph, paths, height):
+  markers = MarkerArray()
+  for i in range(len(paths)):
+    m = pathToMarker(graph, paths[i], i, [1,1,1,0.8], 0.9)
+    markers.markers.append(m)
+  return markers
+
+def graphToMarkerArray(graph, height):
+  # edges
+  graphmarker1 = newMarker(0, Marker.LINE_LIST, 0.05, [0,0,1,1])
+  graphmarker2 = newMarker(1, Marker.LINE_LIST, 0.05, [1,0,1,1])
+  for edge in list(graph.edges):
+    if graph[edge[0]][edge[1]]["area"] == 1:
+      graphmarker1.points.append(newPoint(graph.nodes[edge[0]]["point"], height))
+      graphmarker1.points.append(newPoint(graph.nodes[edge[1]]["point"], height))
+    elif graph[edge[0]][edge[1]]["area"] == 2:
+      graphmarker2.points.append(newPoint(graph.nodes[edge[0]]["point"], height))
+      graphmarker2.points.append(newPoint(graph.nodes[edge[1]]["point"], height))
+  # nodes
+  nodemarker1 = newMarker(2, Marker.SPHERE_LIST, 0.2, [0,0,1,1])
+  nodemarker2 = newMarker(3, Marker.SPHERE_LIST, 0.2, [1,0,1,1])
+  nodemarker3 = newMarker(4, Marker.SPHERE_LIST, 0.1, [0,1,0,1])
+  for node in list(G.nodes):
+    if graph.nodes[node]["area"] == 1:
+      nodemarker1.points.append(newPoint(graph.nodes[node]["point"], height))
+    elif graph.nodes[node]["area"] == 2:
+      nodemarker2.points.append(newPoint(graph.nodes[node]["point"], height))
+    elif graph.nodes[node]["area"] == -1:
+      nodemarker3.points.append(newPoint(graph.nodes[node]["point"], height))
+  # return
+  graphmarkers = MarkerArray()
+  graphmarkers.markers.append(graphmarker1)
+  graphmarkers.markers.append(graphmarker2)
+  graphmarkers.markers.append(nodemarker1)
+  graphmarkers.markers.append(nodemarker2)
+  graphmarkers.markers.append(nodemarker3)
+  return graphmarkers
+
 ### optimization
 
 def optAreaCosts(graph, areaCosts, desiredPath, badPaths):
@@ -263,7 +333,7 @@ def optPolyLabels(graph, areaCosts, desiredPath, badPaths):
   x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
   cost = cp.sum_squares(x - np.array(nodeLabelsHotEnc))
   prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, A @ x == b])
-  prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={"MSK_DPAR_MIO_MAX_TIME":600})
+  prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={"MSK_DPAR_MIO_MAX_TIME":300})
 
   # get new poly labels and graph
   newPolyLabels = [0]*len(graph.nodes)
@@ -304,7 +374,11 @@ if __name__ == "__main__":
   pubGraph = rospy.Publisher('graph', MarkerArray, queue_size=10)
   pubPath = rospy.Publisher('graph_path', Marker, queue_size=10)
   pubPathDesired = rospy.Publisher('graph_path_desired', Marker, queue_size=10)
-  pubKPaths = rospy.Publisher('graph_kpaths', Marker, queue_size=10)
+  pubKPaths = rospy.Publisher('graph_kpaths', MarkerArray, queue_size=10)
+  pubXPath1 = rospy.Publisher('contrastive_path1', Marker, queue_size=10)
+  pubXPath2 = rospy.Publisher('contrastive_path2', Marker, queue_size=10)
+  pubXPath3 = rospy.Publisher('contrastive_path3', Marker, queue_size=10)
+  pubXPath4 = rospy.Publisher('contrastive_path4', Marker, queue_size=10)
 
   rospy.loginfo('Waiting for recast_ros...')
   rospy.wait_for_service('/recast_node/plan_path')
@@ -407,237 +481,56 @@ if __name__ == "__main__":
     # inverse shortest path
     if True:
       # optAreaCosts
-      print("Computing optAreaCosts...")
+      rospy.loginfo("Computing optAreaCosts...")
       x1, G1 = optAreaCosts(G, areaCosts, gpath_desired, kpaths)
-      print(x1)
+      xpath1 = nx.shortest_path(G1, source=pstart, target=pgoal, weight="weight")
+
       # optPolyCosts
-      print("Computing optPolyCosts...")
+      rospy.loginfo("Computing optPolyCosts...")
       x2, G2 = optPolyCosts(G, gpath_desired, kpaths)
-      print(x2)
+      xpath2 = nx.shortest_path(G2, source=pstart, target=pgoal, weight="weight")
+
       # optPolyLabelsApproxFromCosts
-      print("Computing optPolyLabelsApproxFromCosts...")
+      rospy.loginfo("Computing optPolyLabelsApproxFromCosts...")
       x3, G3 = optPolyLabelsApproxFromCosts(G, areaCosts, [1,2], gpath_desired, kpaths)
-      print(x3)
+      xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
+
       # optPolyLabels
-      print("Computing optPolyLabels...")
-      x4, G4 = optPolyLabels(G, areaCosts, gpath_desired, kpaths)
-      print(x4)
+      #rospy.loginfo("Computing optPolyLabels...")
+      #x4, G4 = optPolyLabels(G, areaCosts, gpath_desired, kpaths)
+      #xpath4 = nx.shortest_path(G4, source=pstart, target=pgoal, weight="weight")
 
-    # visualize our graph
-    rospy.loginfo('Visualizing our graph...')
-    graph_height = 0.3
-
-    graphmarker1 = Marker()
-    graphmarker1.header.frame_id = 'map'
-    graphmarker1.header.stamp = rospy.Time.now()
-    graphmarker1.id = 0
-    graphmarker1.action = Marker.ADD
-    graphmarker1.scale.x = 0.05
-    graphmarker1.type = Marker.LINE_LIST
-    graphmarker1.color.r = 0
-    graphmarker1.color.g = 0
-    graphmarker1.color.b = 1
-    graphmarker1.color.a = 1
-    graphmarker1.pose.orientation.w = 1
-    for edge in list(G.edges):
-      if G[edge[0]][edge[1]]["area"] == 1:
-        p1 = Point()
-        p1.x = N[edge[0]]["point"].x
-        p1.y = N[edge[0]]["point"].y
-        p1.z = N[edge[0]]["point"].z + graph_height
-        graphmarker1.points.append(p1)
-        p2 = Point()
-        p2.x = N[edge[1]]["point"].x
-        p2.y = N[edge[1]]["point"].y
-        p2.z = N[edge[1]]["point"].z + graph_height
-        graphmarker1.points.append(p2)
-
-    graphmarker2 = Marker()
-    graphmarker2.header.frame_id = 'map'
-    graphmarker2.header.stamp = rospy.Time.now()
-    graphmarker2.id = 1
-    graphmarker2.action = Marker.ADD
-    graphmarker2.scale.x = 0.05
-    graphmarker2.type = Marker.LINE_LIST
-    graphmarker2.color.r = 1
-    graphmarker2.color.g = 0
-    graphmarker2.color.b = 1
-    graphmarker2.color.a = 1
-    graphmarker2.pose.orientation.w = 1
-    for edge in list(G.edges):
-      if G[edge[0]][edge[1]]["area"] == 2:
-        p1 = Point()
-        p1.x = N[edge[0]]["point"].x
-        p1.y = N[edge[0]]["point"].y
-        p1.z = N[edge[0]]["point"].z + graph_height
-        graphmarker2.points.append(p1)
-        p2 = Point()
-        p2.x = N[edge[1]]["point"].x
-        p2.y = N[edge[1]]["point"].y
-        p2.z = N[edge[1]]["point"].z + graph_height
-        graphmarker2.points.append(p2)
-
-    nodemarker1 = Marker()
-    nodemarker1.header.frame_id = 'map'
-    nodemarker1.header.stamp = rospy.Time.now()
-    nodemarker1.id = 2
-    nodemarker1.action = Marker.ADD
-    nodemarker1.scale.x = 0.2
-    nodemarker1.scale.y = 0.2
-    nodemarker1.scale.z = 0.2
-    nodemarker1.type = Marker.SPHERE_LIST
-    nodemarker1.color.r = 0
-    nodemarker1.color.g = 0
-    nodemarker1.color.b = 1
-    nodemarker1.color.a = 1
-    nodemarker1.pose.orientation.w = 1
-    for node in list(G.nodes):
-      if N[node]["area"] == 1:
-        p = Point()
-        p.x = N[node]["point"].x
-        p.y = N[node]["point"].y
-        p.z = N[node]["point"].z + graph_height
-        nodemarker1.points.append(p)
-
-    nodemarker2 = Marker()
-    nodemarker2.header.frame_id = 'map'
-    nodemarker2.header.stamp = rospy.Time.now()
-    nodemarker2.id = 3
-    nodemarker2.action = Marker.ADD
-    nodemarker2.scale.x = 0.2
-    nodemarker2.scale.y = 0.2
-    nodemarker2.scale.z = 0.2
-    nodemarker2.type = Marker.SPHERE_LIST
-    nodemarker2.color.r = 1
-    nodemarker2.color.g = 0
-    nodemarker2.color.b = 1
-    nodemarker2.color.a = 1
-    nodemarker2.pose.orientation.w = 1
-    for node in list(G.nodes):
-      if N[node]["area"] == 2:
-        p = Point()
-        p.x = N[node]["point"].x
-        p.y = N[node]["point"].y
-        p.z = N[node]["point"].z + graph_height
-        nodemarker2.points.append(p)
-
-    nodemarker3 = Marker()
-    nodemarker3.header.frame_id = 'map'
-    nodemarker3.header.stamp = rospy.Time.now()
-    nodemarker3.id = 4
-    nodemarker3.action = Marker.ADD
-    nodemarker3.scale.x = 0.1
-    nodemarker3.scale.y = 0.1
-    nodemarker3.scale.z = 0.1
-    nodemarker3.type = Marker.SPHERE_LIST
-    nodemarker3.color.r = 0
-    nodemarker3.color.g = 1
-    nodemarker3.color.b = 0
-    nodemarker3.color.a = 1
-    nodemarker3.pose.orientation.w = 1
-    for node in list(G.nodes):
-      if N[node]["area"] == -1:
-        p = Point()
-        p.x = N[node]["point"].x
-        p.y = N[node]["point"].y
-        p.z = N[node]["point"].z + graph_height
-        nodemarker3.points.append(p)
-
-    # publish graph and nodes
-    graphmarkers = MarkerArray()
-    graphmarkers.markers.append(graphmarker1)
-    graphmarkers.markers.append(graphmarker2)
-    graphmarkers.markers.append(nodemarker1)
-    graphmarkers.markers.append(nodemarker2)
-    graphmarkers.markers.append(nodemarker3)
+    # visualize graph and paths
     if pubGraph.get_num_connections() > 0:
-      pubGraph.publish(graphmarkers)
+      rospy.loginfo('Visualizing our graph...')
+      pubGraph.publish( graphToMarkerArray(graph, 0.3) )
 
-    # visualize graph path
-    rospy.loginfo('Visualizing our shortest path...')
-    marker = Marker()
-    marker.header.frame_id = 'map'
-    marker.header.stamp = rospy.Time.now()
-    marker.id = 0
-    marker.action = Marker.ADD
-    marker.scale.x = 0.1
-    marker.type = Marker.LINE_LIST
-    marker.color.r = 1
-    marker.color.g = 0
-    marker.color.b = 0
-    marker.color.a = 1
-    marker.pose.orientation.w = 1
-    for i in range(len(gpath)-1):
-      p1 = Point()
-      p1.x = N[gpath[i  ]]["point"].x
-      p1.y = N[gpath[i  ]]["point"].y
-      p1.z = N[gpath[i  ]]["point"].z + 1
-      marker.points.append(p1)
-      p2 = Point()
-      p2.x = N[gpath[i+1]]["point"].x
-      p2.y = N[gpath[i+1]]["point"].y
-      p2.z = N[gpath[i+1]]["point"].z + 1
-      marker.points.append(p2)
     if pubPath.get_num_connections() > 0:
-      pubPath.publish(marker)
+      rospy.loginfo('Visualizing our shortest path...')
+      pubPath.publish( pathToMarker(G, gpath, 0, [1,0.5,0,1], 1) )
 
-    # visualize graph K paths
-    if len(kpaths) > 0:
+    if len(kpaths) > 0 and pubKPaths.get_num_connections() > 0:
       rospy.loginfo('Visualizing our k-shortest paths...')
-      marker = Marker()
-      marker.header.frame_id = 'map'
-      marker.header.stamp = rospy.Time.now()
-      marker.id = 0
-      marker.action = Marker.ADD
-      marker.scale.x = 0.1
-      marker.type = Marker.LINE_LIST
-      marker.color.r = 1
-      marker.color.g = 1
-      marker.color.b = 1
-      marker.color.a = 0.8
-      marker.pose.orientation.w = 1
-      for path in kpaths:
-        for i in range(len(path)-1):
-          p1 = Point()
-          p1.x = N[path[i  ]]["point"].x
-          p1.y = N[path[i  ]]["point"].y
-          p1.z = N[path[i  ]]["point"].z + 0.9
-          marker.points.append(p1)
-          p2 = Point()
-          p2.x = N[path[i+1]]["point"].x
-          p2.y = N[path[i+1]]["point"].y
-          p2.z = N[path[i+1]]["point"].z + 0.9
-          marker.points.append(p2)
-      if pubKPaths.get_num_connections() > 0:
-        pubKPaths.publish(marker)
+      pubKPaths.publish( pathsToMarkerArray(G, kpaths, 0.9) )
 
-    # visualize desired graph path
-    rospy.loginfo('Visualizing our desired path...')
-    marker = Marker()
-    marker.header.frame_id = 'map'
-    marker.header.stamp = rospy.Time.now()
-    marker.id = 0
-    marker.action = Marker.ADD
-    marker.scale.x = 0.1
-    marker.type = Marker.LINE_LIST
-    marker.color.r = 0
-    marker.color.g = 1
-    marker.color.b = 0
-    marker.color.a = 1
-    marker.pose.orientation.w = 1
-    for i in range(len(gpath_desired)-1):
-      p1 = Point()
-      p1.x = N[gpath_desired[i  ]]["point"].x
-      p1.y = N[gpath_desired[i  ]]["point"].y
-      p1.z = N[gpath_desired[i  ]]["point"].z + 1
-      marker.points.append(p1)
-      p2 = Point()
-      p2.x = N[gpath_desired[i+1]]["point"].x
-      p2.y = N[gpath_desired[i+1]]["point"].y
-      p2.z = N[gpath_desired[i+1]]["point"].z + 1
-      marker.points.append(p2)
     if pubPathDesired.get_num_connections() > 0:
-      pubPathDesired.publish(marker)
+      rospy.loginfo('Visualizing our desired path...')
+      pubPathDesired.publish( pathToMarker(G, path_desired, 0, [0,1,0,1], 1) )
 
+    # visualize contrastive paths
+    if pubXPath1.get_num_connections() > 0:
+      rospy.loginfo('Visualizing contrastive path1...')
+      pubXPath1.publish( pathToMarker(G1, xpath1, 0, [1,0,0,1], 0.4) )
 
+    if pubXPath2.get_num_connections() > 0:
+      rospy.loginfo('Visualizing contrastive path2...')
+      pubXPath2.publish( pathToMarker(G2, xpath2, 0, [0,1,0,1], 0.4) )
+
+    if pubXPath3.get_num_connections() > 0:
+      rospy.loginfo('Visualizing contrastive path3...')
+      pubXPath3.publish( pathToMarker(G3, xpath3, 0, [0,0,1,1], 0.4) )
+
+    #if pubXPath4.get_num_connections() > 0:
+    #  rospy.loginfo('Visualizing contrastive path4...')
+    #  pubXPath4.publish( pathToMarker(G4, xpath4, 0, [1,1,1,1], 0.4) )
 
