@@ -28,8 +28,8 @@ TODO:
 - [x] cvxpy solve inverse shortest path (with k-shortest-paths as constraints)
 - [x] cvxpy optPolyLabels from optPolyCosts (e.g. for each node choose areatype except current that has closest cost to that in x)
 - [x] rviz show cvxpy solutions
-- [ ] compare k-shortest paths to 1) random-walks and 2) incrementally adding new shortest path
-- [ ] implement diverse-solutions alternative to k-shortest paths
+- [ ] incrementally adding new k-shortest paths to constraints (until max iter or until desired is present in k-shortest)
+- [ ] compare k-shortest paths to: 1) random walks (RRTs); 2) diverse short paths (Voss 2015); 3) diverse short paths using weights 4) edge-disjoint paths
 - [ ] rviz compare norm2 to norm1
 
 MAYBE:
