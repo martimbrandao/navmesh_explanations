@@ -194,11 +194,19 @@ def optAreaCosts(graph, areaCosts, desiredPath, badPaths):
   G = np.array(G)
   h = np.array(h)
 
-  # solve with cvxpy
+  # solve with cvxpy (hard constraints version ... has problems when it is impossible that the desired path is shortest)
+  #x = cp.Variable(len(areaCosts))
+  #cost = cp.sum_squares(x - np.array(areaCosts))
+  #prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, x >= 1.0])
+  #value = prob.solve()
+
+  # solve with cvxpy (soft constraints version)
   x = cp.Variable(len(areaCosts))
-  cost = cp.sum_squares(x - np.array(areaCosts))
-  prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, x >= 1.0])
-  value = prob.solve()
+  cost = cp.norm1(x - np.array(areaCosts)) + 1 * cp.maximum(cp.max(G @ x - h), 0)
+  prob = cp.Problem(cp.Minimize(cost), [x >= 1.0])
+  value = prob.solve() # depending on problem and penalty weight, might have to use solver=cp.MOSEK
+
+  # get result
   newAreaCosts = x.value
   if value == float('inf'):
     rospy.loginfo("... optimization failed")
@@ -261,11 +269,19 @@ def optPolyCosts(graph, desiredPath, badPaths):
     if graph[edge[0]][edge[1]]["weight"] < mincost:
       mincost = graph[edge[0]][edge[1]]["weight"]
 
-  # solve with cvxpy
+  # solve with cvxpy (hard constraints version ... has problems when it is impossible that the desired path is shortest)
+  #x = cp.Variable(len(graph.nodes))
+  #cost = cp.sum_squares(x - np.array(nodeCosts))
+  #prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, x >= mincost])
+  #prob.solve()
+
+  # solve with cvxpy (soft constraints version)
   x = cp.Variable(len(graph.nodes))
-  cost = cp.sum_squares(x - np.array(nodeCosts))
-  prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, x >= mincost])
-  prob.solve()
+  cost = cp.norm1(x - np.array(nodeCosts)) + 1 * cp.maximum(cp.max(G @ x - h), 0)
+  prob = cp.Problem(cp.Minimize(cost), [x >= mincost])
+  prob.solve() # depending on problem and penalty weight, might have to use solver=cp.MOSEK
+
+  # get result
   newPolyCosts = x.value
 
   # new graph
@@ -369,11 +385,17 @@ def optPolyLabels(graph, areaCosts, desiredPath, badPaths):
   A = np.array(A)
   b = np.array(b)
 
-  # solve with cvxpy
+  # solve with cvxpy (hard constraints version ... has problems when it is impossible that the desired path is shortest)
+  #x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
+  #cost = cp.sum_squares(x - np.array(nodeLabelsHotEnc))
+  #prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, A @ x == b])
+  #prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={"MSK_DPAR_MIO_MAX_TIME":300})
+
+  # solve with cvxpy (soft constraints version)
   x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
-  cost = cp.sum_squares(x - np.array(nodeLabelsHotEnc))
-  prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, A @ x == b])
-  prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={"MSK_DPAR_MIO_MAX_TIME":300})
+  cost = cp.norm1(x - np.array(nodeLabelsHotEnc)) + 1 * cp.maximum(cp.max(G @ x - h), 0)
+  prob = cp.Problem(cp.Minimize(cost), [A @ x == b])
+  prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
 
   # get new poly labels and graph
   newPolyLabels = [0]*len(graph.nodes)
@@ -515,6 +537,7 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, variable
   for it in range(max_iter):
 
     # compute diverse alternative paths
+    time1 = time.clock()
     if diversity_method == "ksp":
       alternative_paths = list(islice(nx.shortest_simple_paths(newgraph, start, goal, weight="weight"), num_alternatives))
     elif diversity_method == "edp":
@@ -528,10 +551,8 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, variable
 
     all_alternative_paths += alternative_paths
 
-    if pubDiv1.get_num_connections() > 0:
-      pubDiv1.publish( pathsToMarkerArray(G, alternative_paths, 0.9) )
-
     # compute explanation
+    time2 = time.clock()
     if variable == "areaCosts":
       x,newgraph = optAreaCosts(graph, area_costs, desired_path, all_alternative_paths)
     elif variable == "polyCosts":
@@ -540,9 +561,10 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, variable
       x,newgraph = optPolyLabelsApproxFromCosts(graph, area_costs, [1,2], desired_path, all_alternative_paths)
     elif variable == "polyLabels":
       x,newgraph = optPolyLabels(graph, area_costs, desired_path, all_alternative_paths)
+    time3 = time.clock()
 
     # save
-    rospy.loginfo("similarity to desired path = %f" % pathSimilarity(desired_path, path))
+    rospy.loginfo("  iteration %d took %f + %f secs. Similarity to desired path = %f" % (it, time2-time1, time3-time2, pathSimilarity(desired_path, path)))
     history_explanations.append( newgraph.copy() )
     history_explanation_distances.append( pathSimilarity(desired_path, path) )
 
@@ -561,8 +583,17 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, variable
 
 
 def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, variable):
+  # conclusions so far:
+  # 1.no need for more than one path (no need for diverse paths), it's better to just get the shortest path
+  #   then obtain a graph explanation, and use the shortest path of that graph as the next constraint (so we focus on the
+  #   edges that are keeping the shortest path to be the desired). Maybe we would need to have extremely high number of
+  #   alternative paths on diversity fuction for iterations not to be necessary?
+  #   TLDR: just use ksp-1
+  # 2.edp is a bad choice of alternative paths (because shortest path not in list?)
+  # 3.need a few iterations of explanation-computation and constraint-addition until convergence of shortest path to desired path
+
   results = []
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "ksp",          1, 20) )
+  results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "ksp",          1, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "ksp",          5, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "ksp",         10, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "edp",          5, 20) )
@@ -572,7 +603,7 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, variab
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-voss",    10, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-voss",    50, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-brandao",  5, 20) )
-  results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-brandao", 10, 20) )
+ #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-brandao", 10, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-brandao", 50, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-rrt",      5, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-rrt",     10, 20) )
@@ -756,7 +787,8 @@ if __name__ == "__main__":
 
     benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaCosts")
     benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts")
-    benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsApproxFromCosts")
+    #benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsApproxFromCosts")
+    benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabels")
 
     k = 10
     #if pubDiv1.get_num_connections() > 0:
