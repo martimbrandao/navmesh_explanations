@@ -29,13 +29,14 @@ TODO:
 - [x] cvxpy optPolyLabels from optPolyCosts (e.g. for each node choose areatype except current that has closest cost to that in x)
 - [x] rviz show cvxpy solutions
 - [x] incrementally adding new k-shortest paths to constraints (until max iter or until desired is present in k-shortest)
-- [ ] compare k-shortest paths to: 1) random walks (RRTs); 2) diverse short paths (Voss 2015);
-- [x] compare k-shortest paths to: 3) diverse short paths using weights 4) edge-disjoint paths
+- [x] compare k-shortest paths to: 1) diverse short paths using weights 2) edge-disjoint paths
 - [x] compare norm2 to norm1 (norm1 more stable and finds solutions more often)
 - [x] reformulate so that alternative paths are not constraints but costs
+- [x] cvxpy optPolyLabels with desired and alternate path nodes only as variables (might have to iterate)
+- [ ] recast2pddl (for evaluating tathagata's XAIP)
 
 MAYBE:
-- [ ] cvxpy optPolyLabels with path nodes only as variables (might have to iterate)
+- [ ] compare k-shortest paths to: 1) random walks (RRTs); 2) diverse short paths (Voss 2015);
 
 ## Requirements
 

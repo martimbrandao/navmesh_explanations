@@ -13,6 +13,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from recast_ros.srv import RecastProjectSrv, RecastProjectSrvRequest
 from recast_ros.msg import RecastGraph, RecastGraphNode
 from itertools import islice
+from tabulate import tabulate
 
 
 ### functions
@@ -305,23 +306,50 @@ def optPolyLabelsApproxFromCosts(graph, areaCosts, allowedAreaTypes, desiredPath
   newPolyLabels = [0]*len(graph.nodes)
   newGraph = graph.copy()
   for node in graph.nodes:
-    area = graph.nodes[node]["area"]
-    cost = nodeCosts[ graph.nodes[node]["id"] ]
+    oldarea = graph.nodes[node]["area"]
+    oldcost = graph.nodes[node]["cost"]
+    newcost = nodeCosts[ graph.nodes[node]["id"] ]
     # if cost has changed then choose area type with closest cost
-    if cost != graph.nodes[node]["cost"]:
+    if abs(newcost - oldcost) / oldcost > 0.01:
       bestArea = -1
       bestDist = float('inf')
       for a in allowedAreaTypes:
-        if a == area:
+        if a == oldarea:
           continue
-        d = abs(cost - areaCosts[a])
+        d = abs(newcost - areaCosts[a])
         if d < bestDist:
           bestDist = d
           bestArea = a
       newGraph.nodes[node]["area"] = bestArea
       newPolyLabels[ newGraph.nodes[node]["id"] ] = bestArea
     else:
-      newPolyLabels[ newGraph.nodes[node]["id"] ] = cost
+      newPolyLabels[ newGraph.nodes[node]["id"] ] = oldarea
+  return newPolyLabels, newGraph
+
+
+def optPolyLabelsApproxFromCosts2(graph, areaCosts, allowedAreaTypes, desiredPath, badPaths, graphOptCosts):
+  # infer each node's area-type from cost
+  newPolyLabels = [0]*len(graph.nodes)
+  newGraph = graph.copy()
+  for node in graph.nodes:
+    oldarea = graph.nodes[node]["area"]
+    oldcost = graph.nodes[node]["cost"]
+    newcost = graphOptCosts.nodes[node]["cost"]
+    if abs(newcost - oldcost) / oldcost > 0.01:
+      # if cost has changed then choose area type with closest cost
+      bestArea = -1
+      bestDist = float('inf')
+      for a in allowedAreaTypes:
+        if a == oldarea:
+          continue
+        d = abs(newcost - areaCosts[a])
+        if d < bestDist:
+          bestDist = d
+          bestArea = a
+      newGraph.nodes[node]["area"] = bestArea
+      newPolyLabels[ newGraph.nodes[node]["id"] ] = bestArea
+    else:
+      newPolyLabels[ newGraph.nodes[node]["id"] ] = oldarea
   return newPolyLabels, newGraph
 
 
@@ -426,14 +454,132 @@ def optPolyLabels(graph, areaCosts, desiredPath, badPaths):
   return newPolyLabels, newGraph
 
 
-def pathSimilarity(path1, path2):
+def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
+  # variable:     l = nodeLabelsHotEnc                                      # vector of *in-path* node area-labels using one-hot encoding (bool)
+  # cost:         (l-nodeLabelsHotEnc)^2
+  # constraints:  edgeCost_i = dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1    # for all edges i
+  #               sum_(j in B) edgeCost_j - sum_(j in S_i) edgeCost_j <= 0  # for all paths S_i
+  #               l_i + l_(i+1) = 1                                         # each node can have only one 1
+
+  auxgraph = graph.copy()
+
+  # define variable
+  nodeLabelsHotEnc = []
+  nodeList = []
+  for node in graph.nodes:
+    if graph.nodes[node]["area"] == -1:
+      continue
+    # check if this node is in any of the paths
+    inpath = False
+    if node in desiredPath:
+      inpath = True
+    if not inpath:
+      for badPath in badPaths:
+        if node in badPath:
+          inpath = True
+          break
+    # add variables
+    if inpath:
+      if graph.nodes[node]["area"] == 1:
+        auxgraph.nodes[node]["varidx"] = len(nodeLabelsHotEnc)
+        nodeLabelsHotEnc.append(1)
+        nodeLabelsHotEnc.append(0)
+        nodeList.append(node)
+      elif graph.nodes[node]["area"] == 2:
+        auxgraph.nodes[node]["varidx"] = len(nodeLabelsHotEnc)
+        nodeLabelsHotEnc.append(0)
+        nodeLabelsHotEnc.append(1)
+        nodeList.append(node)
+
+  # path cost constraints
+  G = []
+  h = []
+  for path in badPaths:
+    line = [0]*len(nodeLabelsHotEnc)
+    # sum_(j in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
+    for i in range(len(desiredPath)-1):
+      d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
+      if graph.nodes[desiredPath[i]]["portal"] == False:
+        line[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] += d * areaCosts[1]
+        line[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] += d * areaCosts[2]
+      elif graph.nodes[desiredPath[i+1]]["portal"] == False:
+        line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]   ] += d * areaCosts[1]
+        line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]+1 ] += d * areaCosts[2]
+    # - sum_(j in S_i) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
+    for i in range(len(path)-1):
+      d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
+      if graph.nodes[path[i]]["portal"] == False:
+        line[ auxgraph.nodes[path[i]]["varidx"]   ] -= d * areaCosts[1]
+        line[ auxgraph.nodes[path[i]]["varidx"]+1 ] -= d * areaCosts[2]
+      elif graph.nodes[path[i+1]]["portal"] == False:
+        line[ auxgraph.nodes[path[i+1]]["varidx"]   ] -= d * areaCosts[1]
+        line[ auxgraph.nodes[path[i+1]]["varidx"]+1 ] -= d * areaCosts[2]
+    G.append(line)
+    h.append(0)
+  G = np.array(G)
+  h = np.array(h)
+
+  # single active label per node
+  A = []
+  b = []
+  for i in range(len(nodeList)):
+    line = [0]*len(nodeLabelsHotEnc)
+    line[2*i  ] = 1
+    line[2*i+1] = 1
+    A.append(line)
+    b.append(1)
+  A = np.array(A)
+  b = np.array(b)
+
+  # solve with cvxpy (hard constraints version ... has problems when it is impossible that the desired path is shortest)
+  #x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
+  #cost = cp.sum_squares(x - np.array(nodeLabelsHotEnc))
+  #prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, A @ x == b])
+  #prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={"MSK_DPAR_MIO_MAX_TIME":300})
+
+  # solve with cvxpy (soft constraints version)
+  x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
+  cost = cp.norm1(x - np.array(nodeLabelsHotEnc)) + 1 * cp.maximum(cp.max(G @ x - h), 0)
+  prob = cp.Problem(cp.Minimize(cost), [A @ x == b])
+  prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
+
+  # get new poly labels and graph
+  newPolyLabels = [0]*len(graph.nodes)
+  newGraph = graph.copy()
+  for node in graph:
+    newPolyLabels[ graph.nodes[node]["id"] ] = graph.nodes[node]["area"]
+  for i in range(len(nodeList)):
+    node = nodeList[i]
+    if x.value[i*2]:
+      area = 1
+    elif x.value[i*2+1]:
+      area = 2
+    else:
+      area = -1
+    newPolyLabels[ graph.nodes[node]["id"] ] = area
+    if newGraph.nodes[node]["area"] != -1:
+      if area == -1:
+        print("WARNING: new area -1 but original is not...")
+        pdb.set_trace()
+      newGraph.nodes[node]["area"] = area
+      newGraph.nodes[node]["cost"] = areaCosts[area]
+  for edge in list(newGraph.edges):
+    if newGraph.nodes[edge[0]]["cost"] != -1:
+      cost = newGraph.nodes[edge[0]]["cost"]
+    else:
+      cost = newGraph.nodes[edge[1]]["cost"]
+    newGraph[edge[0]][edge[1]]["weight"] = cost * dist(newGraph.nodes[edge[0]]["point"], newGraph.nodes[edge[1]]["point"])
+  return newPolyLabels, newGraph
+
+
+def pathDistance(path1, path2):
   edges1 = []
   for i in range(len(path1)-1):
     edges1.append( (path1[i], path1[i+1]) )
   edges2 = []
   for i in range(len(path2)-1):
     edges2.append( (path2[i], path2[i+1]) )
-  #return len(set(edges1).intersection(edges2)) / len(set(edges1).union(edges2))
+  #return 1 - ( len(set(edges1).intersection(edges2)) / len(set(edges1).union(edges2)) )
   return similaritymeasures.frechet_dist(np.array(path1), np.array(path2))
   #return similaritymeasures.pcm(np.array(path1), np.array(path2))
   #return similaritymeasures.dtw(np.array(path1), np.array(path2))[0]
@@ -443,7 +589,7 @@ def pathIsNew(path, otherpaths, threshold):
   if len(otherpaths) == 0:
     return True
   for p in otherpaths:
-    if pathSimilarity(path, p) > threshold:
+    if pathDistance(path, p) < threshold:
       return False
   return True
 
@@ -516,9 +662,10 @@ def kDiversePathsRRT(graph, start, goal, k):
   return paths
 
 
-def computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, diversity_method, num_alternatives, max_iter):
+def computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, diversity_method, num_alternatives, max_iter, verbose=True, acceptable_dist=0.0):
 
-  rospy.loginfo("Computing explanation type %s, using %d %s-diverse paths and %d iterations..." % (variable, num_alternatives, diversity_method, max_iter))
+  if verbose:
+    rospy.loginfo("Computing explanation type %s, using %d %s-diverse paths and %d iterations..." % (variable, num_alternatives, diversity_method, max_iter))
 
   # check shortest path
   path = nx.shortest_path(graph, source=start, target=goal, weight="weight")
@@ -559,41 +706,76 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, variable
       x,newgraph = optPolyCosts(graph, desired_path, all_alternative_paths)
     elif variable == "polyLabelsApproxFromCosts":
       x,newgraph = optPolyLabelsApproxFromCosts(graph, area_costs, [1,2], desired_path, all_alternative_paths)
+    elif variable == "polyLabelsApproxFromCosts2":
+      ok1, opt_costs_graph = computeExplanationISP(graph, start, goal, area_costs, desired_path, "polyCosts", diversity_method, num_alternatives, max_iter, False)
+      x, newgraph = optPolyLabelsApproxFromCosts2(graph, area_costs, [1,2], desired_path, all_alternative_paths, opt_costs_graph)
     elif variable == "polyLabels":
       x,newgraph = optPolyLabels(graph, area_costs, desired_path, all_alternative_paths)
+    elif variable == "polyLabelsInPath":
+      x,newgraph = optPolyLabelsInPath(graph, area_costs, desired_path, all_alternative_paths)
     time3 = time.clock()
 
+    # compute new shortest path
+    path = nx.shortest_path(newgraph, source=start, target=goal, weight="weight")
+
     # save
-    rospy.loginfo("  iteration %d took %f + %f secs. Similarity to desired path = %f" % (it, time2-time1, time3-time2, pathSimilarity(desired_path, path)))
     history_explanations.append( newgraph.copy() )
-    history_explanation_distances.append( pathSimilarity(desired_path, path) )
+    history_explanation_distances.append( pathDistance(desired_path, path) )
+    if verbose:
+      rospy.loginfo("  iteration %d took %f + %f secs. Similarity to desired path = %f" % (it, time2-time1, time3-time2, pathDistance(desired_path, path)))
 
     # check that desired path is the shortest in new graph
-    path = nx.shortest_path(newgraph, source=start, target=goal, weight="weight")
-    if path == desired_path:
+    if pathDistance(desired_path, path) < acceptable_dist:
       desired_is_shortest = True
       break
 
   # pick best explanation (since performance usually fluctuates as we add more alternative paths)
   best_explanation = np.argmin(history_explanation_distances)
   newgraph = history_explanations[best_explanation]
-  rospy.loginfo("...finished in %d iterations. Best explanation leads to a shortest-desired path distance = %f" % (it, history_explanation_distances[best_explanation]))
+  if verbose:
+    rospy.loginfo("...finished %s in %d iterations. Best explanation leads to a shortest-desired path distance = %f" % (variable, it+1, history_explanation_distances[best_explanation]))
 
   return desired_is_shortest, newgraph
 
 
 def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, variable):
   # conclusions so far:
-  # 1.no need for more than one path (no need for diverse paths), it's better to just get the shortest path
+  # 1.often no need for more than one path (no need for diverse paths), it's better to just get the shortest path
   #   then obtain a graph explanation, and use the shortest path of that graph as the next constraint (so we focus on the
-  #   edges that are keeping the shortest path to be the desired). Maybe we would need to have extremely high number of
-  #   alternative paths on diversity fuction for iterations not to be necessary?
-  #   TLDR: just use ksp-1
+  #   edges that are keeping the shortest path to be the desired). We would need to have extremely high number of
+  #   alternative paths on diversity fuction for iterations not to be necessary. Iterating explanation and shortest-paths more effective.
+  #   However, kdp-brandao with a few paths is useful in more challenging problems.
+  #   TLDR: just use ksp-1 or kdp-brandao-2/5
   # 2.edp is a bad choice of alternative paths (because shortest path not in list?)
   # 3.need a few iterations of explanation-computation and constraint-addition until convergence of shortest path to desired path
+  # 4.approximations to the polyLabels problem (such as computing labels from costs) are poor, better to just use full 
+  #   optimization of labels along desired and alternative paths (optPolyLabelsInPath)
+
+  rospy.loginfo("--------------------------------------------------")
+  rospy.loginfo("Benchmarking %s..." % variable)
 
   results = []
-  results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "ksp",          1, 20) )
+  for diversity_method in ["ksp", "kdp-brandao"]:
+    for num_alternatives in [1, 2, 5, 10, 20]:
+      for max_iter in [10]:
+        time1 = time.clock()
+        ok, newgraph = computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, diversity_method, num_alternatives, max_iter, verbose=False, acceptable_dist=5.0)
+        time2 = time.clock()
+
+        path = nx.shortest_path(newgraph, source=start, target=goal, weight="weight")
+
+        result = {}
+        result["diversity_method"] = diversity_method
+        result["num_alternatives"] = num_alternatives
+        result["max_iter"] = max_iter
+        result["graph"] = newgraph
+        result["dist"] = pathDistance(desired_path, path)
+        result["time"] = time2 - time1
+        results.append(result)
+
+  rospy.loginfo("Results:\n" + str(tabulate(results, headers="keys")))
+
+ #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "ksp",          1, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "ksp",          5, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "ksp",         10, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "edp",          5, 20) )
@@ -602,12 +784,14 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, variab
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-voss",     5, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-voss",    10, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-voss",    50, 20) )
+ #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-brandao",  2, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-brandao",  5, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-brandao", 10, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-brandao", 50, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-rrt",      5, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-rrt",     10, 20) )
  #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-rrt",     50, 20) )
+
 
 ### main
 
@@ -788,6 +972,8 @@ if __name__ == "__main__":
     benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaCosts")
     benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts")
     #benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsApproxFromCosts")
+    #benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsApproxFromCosts2")
+    benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath")
     benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabels")
 
     k = 10
