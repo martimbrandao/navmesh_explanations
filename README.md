@@ -33,10 +33,17 @@ TODO:
 - [x] compare norm2 to norm1 (norm1 more stable and finds solutions more often)
 - [x] reformulate so that alternative paths are not constraints but costs
 - [x] cvxpy optPolyLabels with desired and alternate path nodes only as variables (might have to iterate)
+- [x] benchmark l1norm and number of changed nodes
+- [x] check whether optPolyLabels can find better solutions than optPolyLabelsInPath
+- [x] visualize graph costs
+- [ ] HAL paper baseline (switch all 0 labels to 1, vice-versa, etc.)
 - [ ] recast2pddl (for evaluating tathagata's XAIP)
+- [ ] failure explanations
 
 MAYBE:
 - [ ] compare k-shortest paths to: 1) random walks (RRTs); 2) diverse short paths (Voss 2015);
+- [ ] gaitmesh subdivide triangles
+- [ ] some more environments, e.g. KCL
 
 ## Requirements
 
@@ -44,6 +51,6 @@ This package uses python3 (for cvxpy).
 
 ```
 sudo apt install python3-pip
-pip3 install rospkg networkx cvxpy cvxopt
+pip3 install rospkg networkx cvxpy cvxopt similaritymeasures tabulate matplotlib
 ```
 

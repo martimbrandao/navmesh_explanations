@@ -4,6 +4,7 @@ import networkx as nx
 import numpy as np
 import cvxpy as cp
 import similaritymeasures
+import matplotlib.pyplot as plt
 import time
 import random
 import pdb
@@ -146,7 +147,7 @@ def graphToMarkerArray(graph, height):
   nodemarker1 = newMarker(2, Marker.SPHERE_LIST, 0.2, [0,0,1,1])
   nodemarker2 = newMarker(3, Marker.SPHERE_LIST, 0.2, [1,0,1,1])
   nodemarker3 = newMarker(4, Marker.SPHERE_LIST, 0.1, [0,1,0,1])
-  for node in list(G.nodes):
+  for node in list(graph.nodes):
     if graph.nodes[node]["area"] == 1:
       nodemarker1.points.append(newPoint(graph.nodes[node]["point"], height))
     elif graph.nodes[node]["area"] == 2:
@@ -159,7 +160,85 @@ def graphToMarkerArray(graph, height):
   graphmarkers.markers.append(graphmarker2)
   graphmarkers.markers.append(nodemarker1)
   graphmarkers.markers.append(nodemarker2)
-  graphmarkers.markers.append(nodemarker3)
+  #graphmarkers.markers.append(nodemarker3)
+  return graphmarkers
+
+
+def graphToMarkerArrayByArea(graph, height, area_types):
+  colors = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080', '#ffffff', '#000000']
+  # init
+  area2edgemarkerIdx = {}
+  area2nodemarkerIdx = {}
+  edgemarkers = []
+  nodemarkers = []
+  id = 0
+  for i in range(len(area_types)):
+    color = [int(colors[i % len(colors)][j:j + 2], 16) / 255. for j in (1, 3, 5)] + [1]
+    area2edgemarkerIdx[ area_types[i] ] = len(edgemarkers)
+    edgemarkers.append( newMarker(id, Marker.LINE_LIST, 0.05, color) )
+    id += 1
+    area2nodemarkerIdx[ area_types[i] ] = len(nodemarkers)
+    nodemarkers.append( newMarker(id, Marker.SPHERE_LIST, 0.2, color) )
+    id += 1
+  # edges
+  for edge in list(graph.edges):
+    idx = area2edgemarkerIdx[ graph[edge[0]][edge[1]]["area"] ]
+    edgemarkers[idx].points.append(newPoint(graph.nodes[edge[0]]["point"], height))
+    edgemarkers[idx].points.append(newPoint(graph.nodes[edge[1]]["point"], height))
+  # nodes
+  for node in list(G.nodes):
+    idx = area2nodemarkerIdx[ graph.nodes[node]["area"] ]
+    nodemarkers[idx].points.append(newPoint(graph.nodes[node]["point"], height))
+  # return
+  graphmarkers = MarkerArray()
+  for em in edgemarkers:
+    if len(em.points) > 0:
+      graphmarkers.markers.append(em)
+  for nm in nodemarkers:
+    if len(nm.points) > 0:
+      graphmarkers.markers.append(nm)
+  return graphmarkers
+
+def graphToMarkerArrayByCost(graph, height):
+  nbins = 20
+  colors = plt.get_cmap("rainbow", nbins) # cool, rainbow
+  # discretize costs
+  costs = []
+  for edge in list(graph.edges):
+    costs.append( max(graph.nodes[edge[0]]["cost"], graph.nodes[edge[1]]["cost"]) )
+  costs = np.array(costs)
+  bins = np.linspace(np.min(costs), np.max(costs), nbins-1)
+  # init
+  edgemarkers = []
+  for i in range(nbins):
+    edgemarkers.append( newMarker(i, Marker.LINE_LIST, 0.05, colors(i)) )
+  nodemarkers = []
+  for i in range(nbins):
+    nodemarkers.append( newMarker(len(edgemarkers)+i, Marker.SPHERE_LIST, 0.2, colors(i)) )
+  nodemarkerportals = newMarker(len(edgemarkers)+len(nodemarkers), Marker.SPHERE_LIST, 0.1, [0,1,0,1])
+  # edges
+  for edge in list(graph.edges):
+    cost = max(graph.nodes[edge[0]]["cost"], graph.nodes[edge[1]]["cost"])
+    idx = np.digitize(cost, bins)
+    edgemarkers[idx].points.append(newPoint(graph.nodes[edge[0]]["point"], height))
+    edgemarkers[idx].points.append(newPoint(graph.nodes[edge[1]]["point"], height))
+  # nodes
+  for node in list(graph.nodes):
+    if graph.nodes[node]["area"] == -1:
+      nodemarkerportals.points.append(newPoint(graph.nodes[node]["point"], height))
+    else:
+      cost = graph.nodes[node]["cost"]
+      idx = np.digitize(cost, bins)
+      nodemarkers[idx].points.append(newPoint(graph.nodes[node]["point"], height))
+  # return
+  graphmarkers = MarkerArray()
+  for em in edgemarkers:
+    if len(em.points) > 0:
+      graphmarkers.markers.append(em)
+  for nm in nodemarkers:
+    if len(nm.points) > 0:
+      graphmarkers.markers.append(nm)
+  #graphmarkers.markers.append(nodemarkerportals)
   return graphmarkers
 
 
@@ -203,8 +282,8 @@ def optAreaCosts(graph, areaCosts, desiredPath, badPaths):
 
   # solve with cvxpy (soft constraints version)
   x = cp.Variable(len(areaCosts))
-  cost = cp.norm1(x - np.array(areaCosts)) + 1 * cp.maximum(cp.max(G @ x - h), 0)
-  prob = cp.Problem(cp.Minimize(cost), [x >= 1.0])
+  cost = cp.norm2(x - np.array(areaCosts)) + 1 * cp.maximum(cp.max(G @ x - h), 0)
+  prob = cp.Problem(cp.Minimize(cost), [x[0] == 0, x[1:] >= 1])
   value = prob.solve() # depending on problem and penalty weight, might have to use solver=cp.MOSEK
 
   # get result
@@ -223,9 +302,9 @@ def optAreaCosts(graph, areaCosts, desiredPath, badPaths):
       area = newGraph.nodes[edge[0]]["area"]
     else:
       area = newGraph.nodes[edge[1]]["area"]
+    newGraph[edge[0]][edge[1]]["area"] = area
+    newGraph[edge[0]][edge[1]]["cost"] = newAreaCosts[area]
     newGraph[edge[0]][edge[1]]["weight"] = newAreaCosts[area] * dist(newGraph.nodes[edge[0]]["point"], newGraph.nodes[edge[1]]["point"])
-    if newGraph[edge[0]][edge[1]]["weight"] <= 0:
-      pdb.set_trace()
   return x.value, newGraph
 
 
@@ -294,6 +373,7 @@ def optPolyCosts(graph, desiredPath, badPaths):
       cost = newGraph.nodes[edge[0]]["cost"]
     else:
       cost = newGraph.nodes[edge[1]]["cost"]
+    newGraph[edge[0]][edge[1]]["cost"] = cost
     newGraph[edge[0]][edge[1]]["weight"] = cost * dist(newGraph.nodes[edge[0]]["point"], newGraph.nodes[edge[1]]["point"])
   return x.value, newGraph
 
@@ -310,7 +390,7 @@ def optPolyLabelsApproxFromCosts(graph, areaCosts, allowedAreaTypes, desiredPath
     oldcost = graph.nodes[node]["cost"]
     newcost = nodeCosts[ graph.nodes[node]["id"] ]
     # if cost has changed then choose area type with closest cost
-    if abs(newcost - oldcost) / oldcost > 0.01:
+    if abs(newcost - oldcost) > 0.01:
       bestArea = -1
       bestDist = float('inf')
       for a in allowedAreaTypes:
@@ -321,9 +401,20 @@ def optPolyLabelsApproxFromCosts(graph, areaCosts, allowedAreaTypes, desiredPath
           bestDist = d
           bestArea = a
       newGraph.nodes[node]["area"] = bestArea
+      newGraph.nodes[node]["cost"] = areaCosts[bestArea]
       newPolyLabels[ newGraph.nodes[node]["id"] ] = bestArea
     else:
       newPolyLabels[ newGraph.nodes[node]["id"] ] = oldarea
+  for edge in list(newGraph.edges):
+    if newGraph.nodes[edge[0]]["cost"] != -1:
+      cost = newGraph.nodes[edge[0]]["cost"]
+      area = newGraph.nodes[edge[0]]["area"]
+    else:
+      cost = newGraph.nodes[edge[1]]["cost"]
+      area = newGraph.nodes[edge[1]]["area"]
+    newGraph[edge[0]][edge[1]]["area"] = area
+    newGraph[edge[0]][edge[1]]["cost"] = cost
+    newGraph[edge[0]][edge[1]]["weight"] = cost * dist(newGraph.nodes[edge[0]]["point"], newGraph.nodes[edge[1]]["point"])
   return newPolyLabels, newGraph
 
 
@@ -335,7 +426,7 @@ def optPolyLabelsApproxFromCosts2(graph, areaCosts, allowedAreaTypes, desiredPat
     oldarea = graph.nodes[node]["area"]
     oldcost = graph.nodes[node]["cost"]
     newcost = graphOptCosts.nodes[node]["cost"]
-    if abs(newcost - oldcost) / oldcost > 0.01:
+    if abs(newcost - oldcost) > 0.01:
       # if cost has changed then choose area type with closest cost
       bestArea = -1
       bestDist = float('inf')
@@ -347,9 +438,20 @@ def optPolyLabelsApproxFromCosts2(graph, areaCosts, allowedAreaTypes, desiredPat
           bestDist = d
           bestArea = a
       newGraph.nodes[node]["area"] = bestArea
+      newGraph.nodes[node]["cost"] = areaCosts[bestArea]
       newPolyLabels[ newGraph.nodes[node]["id"] ] = bestArea
     else:
       newPolyLabels[ newGraph.nodes[node]["id"] ] = oldarea
+  for edge in list(newGraph.edges):
+    if newGraph.nodes[edge[0]]["cost"] != -1:
+      cost = newGraph.nodes[edge[0]]["cost"]
+      area = newGraph.nodes[edge[0]]["area"]
+    else:
+      cost = newGraph.nodes[edge[1]]["cost"]
+      area = newGraph.nodes[edge[1]]["area"]
+    newGraph[edge[0]][edge[1]]["area"] = area
+    newGraph[edge[0]][edge[1]]["cost"] = cost
+    newGraph[edge[0]][edge[1]]["weight"] = cost * dist(newGraph.nodes[edge[0]]["point"], newGraph.nodes[edge[1]]["point"])
   return newPolyLabels, newGraph
 
 
@@ -448,8 +550,12 @@ def optPolyLabels(graph, areaCosts, desiredPath, badPaths):
   for edge in list(newGraph.edges):
     if newGraph.nodes[edge[0]]["cost"] != -1:
       cost = newGraph.nodes[edge[0]]["cost"]
+      area = newGraph.nodes[edge[0]]["area"]
     else:
       cost = newGraph.nodes[edge[1]]["cost"]
+      area = newGraph.nodes[edge[1]]["area"]
+    newGraph[edge[0]][edge[1]]["area"] = area
+    newGraph[edge[0]][edge[1]]["cost"] = cost
     newGraph[edge[0]][edge[1]]["weight"] = cost * dist(newGraph.nodes[edge[0]]["point"], newGraph.nodes[edge[1]]["point"])
   return newPolyLabels, newGraph
 
@@ -566,8 +672,12 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
   for edge in list(newGraph.edges):
     if newGraph.nodes[edge[0]]["cost"] != -1:
       cost = newGraph.nodes[edge[0]]["cost"]
+      area = newGraph.nodes[edge[0]]["area"]
     else:
       cost = newGraph.nodes[edge[1]]["cost"]
+      area = newGraph.nodes[edge[1]]["area"]
+    newGraph[edge[0]][edge[1]]["area"] = area
+    newGraph[edge[0]][edge[1]]["cost"] = cost
     newGraph[edge[0]][edge[1]]["weight"] = cost * dist(newGraph.nodes[edge[0]]["point"], newGraph.nodes[edge[1]]["point"])
   return newPolyLabels, newGraph
 
@@ -662,16 +772,16 @@ def kDiversePathsRRT(graph, start, goal, k):
   return paths
 
 
-def computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, diversity_method, num_alternatives, max_iter, verbose=True, acceptable_dist=0.0):
+def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, diversity_method, num_alternatives, max_iter, verbose=True, acceptable_dist=0.0):
 
   if verbose:
-    rospy.loginfo("Computing explanation type %s, using %d %s-diverse paths and %d iterations..." % (variable, num_alternatives, diversity_method, max_iter))
+    rospy.loginfo("Computing explanation type %s, using %d %s-diverse paths and %d iterations..." % (problem_type, num_alternatives, diversity_method, max_iter))
 
   # check shortest path
   path = nx.shortest_path(graph, source=start, target=goal, weight="weight")
   if path == desired_path:
     rospy.loginfo("Shortest path is already equal to desired. Nothing to explain.")
-    return True, graph.copy()
+    return True, [], graph.copy()
 
   # init
   desired_is_shortest = False
@@ -700,18 +810,18 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, variable
 
     # compute explanation
     time2 = time.clock()
-    if variable == "areaCosts":
+    if problem_type == "areaCosts":
       x,newgraph = optAreaCosts(graph, area_costs, desired_path, all_alternative_paths)
-    elif variable == "polyCosts":
+    elif problem_type == "polyCosts":
       x,newgraph = optPolyCosts(graph, desired_path, all_alternative_paths)
-    elif variable == "polyLabelsApproxFromCosts":
+    elif problem_type == "polyLabelsApproxFromCosts":
       x,newgraph = optPolyLabelsApproxFromCosts(graph, area_costs, [1,2], desired_path, all_alternative_paths)
-    elif variable == "polyLabelsApproxFromCosts2":
-      ok1, opt_costs_graph = computeExplanationISP(graph, start, goal, area_costs, desired_path, "polyCosts", diversity_method, num_alternatives, max_iter, False)
+    elif problem_type == "polyLabelsApproxFromCosts2":
+      ok1, x1, opt_costs_graph = computeExplanationISP(graph, start, goal, area_costs, desired_path, "polyCosts", diversity_method, num_alternatives, max_iter, False)
       x, newgraph = optPolyLabelsApproxFromCosts2(graph, area_costs, [1,2], desired_path, all_alternative_paths, opt_costs_graph)
-    elif variable == "polyLabels":
+    elif problem_type == "polyLabels":
       x,newgraph = optPolyLabels(graph, area_costs, desired_path, all_alternative_paths)
-    elif variable == "polyLabelsInPath":
+    elif problem_type == "polyLabelsInPath":
       x,newgraph = optPolyLabelsInPath(graph, area_costs, desired_path, all_alternative_paths)
     time3 = time.clock()
 
@@ -733,12 +843,12 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, variable
   best_explanation = np.argmin(history_explanation_distances)
   newgraph = history_explanations[best_explanation]
   if verbose:
-    rospy.loginfo("...finished %s in %d iterations. Best explanation leads to a shortest-desired path distance = %f" % (variable, it+1, history_explanation_distances[best_explanation]))
+    rospy.loginfo("...finished %s in %d iterations. Best explanation leads to a shortest-desired path distance = %f" % (problem_type, it+1, history_explanation_distances[best_explanation]))
 
-  return desired_is_shortest, newgraph
+  return desired_is_shortest, x, newgraph
 
 
-def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, variable):
+def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, verbose, acceptable_dist):
   # conclusions so far:
   # 1.often no need for more than one path (no need for diverse paths), it's better to just get the shortest path
   #   then obtain a graph explanation, and use the shortest path of that graph as the next constraint (so we focus on the
@@ -752,45 +862,57 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, variab
   #   optimization of labels along desired and alternative paths (optPolyLabelsInPath)
 
   rospy.loginfo("--------------------------------------------------")
-  rospy.loginfo("Benchmarking %s..." % variable)
+  rospy.loginfo("Benchmarking %s..." % problem_type)
 
   results = []
   for diversity_method in ["ksp", "kdp-brandao"]:
     for num_alternatives in [1, 2, 5, 10, 20]:
       for max_iter in [10]:
+
+        # compute explanation
         time1 = time.clock()
-        ok, newgraph = computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, diversity_method, num_alternatives, max_iter, verbose=False, acceptable_dist=5.0)
+        ok, x, newgraph = computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, diversity_method, num_alternatives, max_iter, verbose, acceptable_dist)
         time2 = time.clock()
 
+        # compute shortest path
         path = nx.shortest_path(newgraph, source=start, target=goal, weight="weight")
 
+        # compute l1norm and number of changed variables
+        if problem_type == "areaCosts":
+          x1 = np.array(area_costs)
+          x2 = np.array(x)
+        elif problem_type == "polyCosts":
+          x1 = []
+          x2 = []
+          for node in graph:
+            x1.append(graph.nodes[node]["cost"])
+            x2.append(newgraph.nodes[node]["cost"])
+          x1 = np.array(x1)
+          x2 = np.array(x2)
+        else: # polyLabels and approximations
+          x1 = []
+          x2 = []
+          for node in graph:
+            x1.append(graph.nodes[node]["area"])
+            x2.append(newgraph.nodes[node]["area"])
+          x1 = np.array(x1)
+          x2 = np.array(x2)
+        l1norm = np.linalg.norm(x2 - x1, 1)
+        changed = np.sum( np.abs(x2 - x1) > 0.01 )
+
+        # log results
         result = {}
         result["diversity_method"] = diversity_method
         result["num_alternatives"] = num_alternatives
         result["max_iter"] = max_iter
         result["graph"] = newgraph
+        result["l1_norm"] = l1norm
+        result["changed_vars"] = changed
         result["dist"] = pathDistance(desired_path, path)
         result["time"] = time2 - time1
         results.append(result)
 
   rospy.loginfo("Results:\n" + str(tabulate(results, headers="keys")))
-
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "ksp",          1, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "ksp",          5, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "ksp",         10, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "edp",          5, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "edp",         10, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "edp",         50, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-voss",     5, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-voss",    10, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-voss",    50, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-brandao",  2, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-brandao",  5, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-brandao", 10, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-brandao", 50, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-rrt",      5, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-rrt",     10, 20) )
- #results.append( computeExplanationISP(graph, start, goal, area_costs, desired_path, variable, "kdp-rrt",     50, 20) )
 
 
 ### main
@@ -801,19 +923,23 @@ if __name__ == "__main__":
 
   # ros init
   rospy.init_node('test_recast_explanations')
+
   pubGraph = rospy.Publisher('graph', MarkerArray, queue_size=10)
   pubPath = rospy.Publisher('graph_path', Marker, queue_size=10)
   pubPathDesired = rospy.Publisher('graph_path_desired', Marker, queue_size=10)
-  pubKPaths = rospy.Publisher('graph_kpaths', MarkerArray, queue_size=10)
-  pubXPath1 = rospy.Publisher('contrastive_path1', Marker, queue_size=10)
-  pubXPath2 = rospy.Publisher('contrastive_path2', Marker, queue_size=10)
-  pubXPath3 = rospy.Publisher('contrastive_path3', Marker, queue_size=10)
-  pubXPath4 = rospy.Publisher('contrastive_path4', Marker, queue_size=10)
+
   pubDiv1 = rospy.Publisher('graph_diversity1', MarkerArray, queue_size=10)
   pubDiv2 = rospy.Publisher('graph_diversity2', MarkerArray, queue_size=10)
   pubDiv3 = rospy.Publisher('graph_diversity3', MarkerArray, queue_size=10)
   pubDiv4 = rospy.Publisher('graph_diversity4', MarkerArray, queue_size=10)
   pubDiv5 = rospy.Publisher('graph_diversity5', MarkerArray, queue_size=10)
+
+  pubAreaCostsPath =   rospy.Publisher('expl_area_costs_path',   Marker,      queue_size=10)
+  pubAreaCostsGraph =  rospy.Publisher('expl_area_costs_graph',  MarkerArray, queue_size=10)
+  pubPolyCostsPath =   rospy.Publisher('expl_poly_costs_path',   Marker,      queue_size=10)
+  pubPolyCostsGraph =  rospy.Publisher('expl_poly_costs_graph',  MarkerArray, queue_size=10)
+  pubPolyLabelsPath =  rospy.Publisher('expl_poly_labels_path',  Marker,      queue_size=10)
+  pubPolyLabelsGraph = rospy.Publisher('expl_poly_labels_graph', MarkerArray, queue_size=10)
 
   rospy.loginfo('Waiting for recast_ros...')
   rospy.wait_for_service('/recast_node/plan_path')
@@ -900,105 +1026,87 @@ if __name__ == "__main__":
         totalcost += cost
       rospy.loginfo('total cost = ' + str(totalcost))
 
-    # k-shortest paths
-    if True:
-      rospy.loginfo('Solving k-shortest paths on our local graph...')
-      time1 = time.clock()
-      kpaths = list(islice(nx.shortest_simple_paths(G, pstart, pgoal, weight="weight"), 5))
-      rospy.loginfo('... elapsed time: ' + str(time.clock()-time1))
-    else:
-      kpaths = []
-
     # desired path on graph
     rospy.loginfo('Solving shortest-hop ("desired") path on our local graph...')
     gpath_desired = nx.shortest_path(G, source=pstart, target=pgoal)
 
-    # inverse shortest path
-    if True:
-      # optAreaCosts
-      rospy.loginfo("Computing optAreaCosts...")
-      x1, G1 = optAreaCosts(G, areaCosts, gpath_desired, kpaths)
-      xpath1 = nx.shortest_path(G1, source=pstart, target=pgoal, weight="weight")
-
-      # optPolyCosts
-      rospy.loginfo("Computing optPolyCosts...")
-      x2, G2 = optPolyCosts(G, gpath_desired, kpaths)
-      xpath2 = nx.shortest_path(G2, source=pstart, target=pgoal, weight="weight")
-
-      # optPolyLabelsApproxFromCosts
-      rospy.loginfo("Computing optPolyLabelsApproxFromCosts...")
-      x3, G3 = optPolyLabelsApproxFromCosts(G, areaCosts, [1,2], gpath_desired, kpaths)
-      xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
-
-      # optPolyLabels
-      #rospy.loginfo("Computing optPolyLabels...")
-      #x4, G4 = optPolyLabels(G, areaCosts, gpath_desired, kpaths)
-      #xpath4 = nx.shortest_path(G4, source=pstart, target=pgoal, weight="weight")
-
     # visualize graph and paths
     if pubGraph.get_num_connections() > 0:
       rospy.loginfo('Visualizing our graph...')
-      pubGraph.publish( graphToMarkerArray(graph, 0.3) )
+      #pubGraph.publish( graphToMarkerArrayByArea(G, 0.2, list(range(-1,len(areaCosts)))) )
+      pubGraph.publish( graphToMarkerArray(G, 0.2) )
 
     if pubPath.get_num_connections() > 0:
       rospy.loginfo('Visualizing our shortest path...')
       pubPath.publish( pathToMarker(G, gpath, 0, [1,0.5,0,1], 1) )
 
-    if len(kpaths) > 0 and pubKPaths.get_num_connections() > 0:
-      rospy.loginfo('Visualizing our k-shortest paths...')
-      pubKPaths.publish( pathsToMarkerArray(G, kpaths, 0.9) )
-
     if pubPathDesired.get_num_connections() > 0:
       rospy.loginfo('Visualizing our desired path...')
       pubPathDesired.publish( pathToMarker(G, gpath_desired, 0, [0,1,0,1], 1) )
 
-    # visualize contrastive paths
-    if pubXPath1.get_num_connections() > 0:
-      rospy.loginfo('Visualizing contrastive path1...')
-      pubXPath1.publish( pathToMarker(G1, xpath1, 0, [1,0,0,1], 0.4) )
+    # visualize diversity methods
+    if True:
+      k = 10
+      if pubDiv1.get_num_connections() > 0:
+        rospy.loginfo('Visualizing diverse path function 1 (ksp)...')
+        div1 = list(islice(nx.shortest_simple_paths(G, pstart, pgoal, weight="weight"), k))
+        pubDiv1.publish( pathsToMarkerArray(G, div1, 0.9) )
 
-    if pubXPath2.get_num_connections() > 0:
-      rospy.loginfo('Visualizing contrastive path2...')
-      pubXPath2.publish( pathToMarker(G2, xpath2, 0, [0,1,0,1], 0.4) )
+      if pubDiv2.get_num_connections() > 0:
+        rospy.loginfo('Visualizing diverse path function 2 (edp)...')
+        div2 = list(nx.edge_disjoint_paths(G, pstart, pgoal, cutoff=k))
+        pubDiv2.publish( pathsToMarkerArray(G, div2, 0.9) )
 
-    if pubXPath3.get_num_connections() > 0:
-      rospy.loginfo('Visualizing contrastive path3...')
-      pubXPath3.publish( pathToMarker(G3, xpath3, 0, [0,0,1,1], 0.4) )
+      #if pubDiv3.get_num_connections() > 0:
+      #  rospy.loginfo('Visualizing diverse path function 3 (kdp-voss)...')
+      #  div3 = kDiversePathsVoss(G, pstart, pgoal, k)
+      #  pubDiv3.publish( pathsToMarkerArray(G, div3, 0.9) )
 
-    #if pubXPath4.get_num_connections() > 0:
-    #  rospy.loginfo('Visualizing contrastive path4...')
-    #  pubXPath4.publish( pathToMarker(G4, xpath4, 0, [1,1,1,1], 0.4) )
+      if pubDiv4.get_num_connections() > 0:
+        rospy.loginfo('Visualizing diverse path function 4 (kdp-brandao)...')
+        div4 = kDiversePathsBrandao(G, pstart, pgoal, k)
+        pubDiv4.publish( pathsToMarkerArray(G, div4, 0.9) )
 
-    benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaCosts")
-    benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts")
-    #benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsApproxFromCosts")
-    #benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsApproxFromCosts2")
-    benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath")
-    benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabels")
+      #if pubDiv5.get_num_connections() > 0:
+      #  rospy.loginfo('Visualizing diverse path function 5 (rrt)...')
+      #  div5 = kDiversePathsRRT(G, pstart, pgoal, k)
+      #  pubDiv5.publish( pathsToMarkerArray(G, div5, 0.9) )
 
-    k = 10
-    #if pubDiv1.get_num_connections() > 0:
-    #  rospy.loginfo('Visualizing diverse path function 1...')
-    #  div1 = list(islice(nx.shortest_simple_paths(G, pstart, pgoal, weight="weight"), k))
-    #  pubDiv1.publish( pathsToMarkerArray(G, div1, 0.9) )
+    # compute & visualize explanations by inverse shortest paths
+    if pubAreaCostsGraph.get_num_connections() > 0 or pubAreaCostsPath.get_num_connections() > 0:
+      rospy.loginfo("Computing explanation based on areaCosts...")
+      ok1, x1, G1 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaCosts", "kdp-brandao", 2, 10, verbose=False, acceptable_dist=3.0)
+      xpath1 = nx.shortest_path(G1, source=pstart, target=pgoal, weight="weight")
+      # visualize
+      pubAreaCostsPath.publish( pathToMarker(G1, xpath1, 0, [1,0,0,1], 0.9) )
+      pubAreaCostsGraph.publish( graphToMarkerArrayByCost(G1, 0.2) )
 
-    if pubDiv2.get_num_connections() > 0:
-      rospy.loginfo('Visualizing diverse path function 2...')
-      div2 = list(nx.edge_disjoint_paths(G, pstart, pgoal, cutoff=k))
-      pubDiv2.publish( pathsToMarkerArray(G, div2, 0.9) )
+    if pubPolyCostsPath.get_num_connections() > 0 or pubPolyCostsGraph.get_num_connections() > 0:
+      rospy.loginfo("Computing explanation based on polyCosts...")
+      ok2, x2, G2 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts", "kdp-brandao", 2, 10, verbose=False, acceptable_dist=3.0)
+      xpath2 = nx.shortest_path(G2, source=pstart, target=pgoal, weight="weight")
+      # visualize
+      pubPolyCostsPath.publish( pathToMarker(G2, xpath2, 0, [1,0,0,1], 0.9) )
+      pubPolyCostsGraph.publish( graphToMarkerArrayByCost(G2, 0.2) )
 
-    #if pubDiv3.get_num_connections() > 0:
-    #  rospy.loginfo('Visualizing diverse path function 3...')
-    #  div3 = kDiversePathsVoss(G, pstart, pgoal, k)
-    #  pubDiv3.publish( pathsToMarkerArray(G, div3, 0.9) )
+    if pubPolyLabelsPath.get_num_connections() > 0 or pubPolyLabelsGraph.get_num_connections() > 0:
+      rospy.loginfo("Computing explanation based on polyLabelsInPath...")
+      ok3, x3, G3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", "kdp-brandao", 2, 10, verbose=False, acceptable_dist=3.0)
+      xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
+      # visualize
+      pubPolyLabelsPath.publish( pathToMarker(G3, xpath3, 0, [1,0,0,1], 0.9) )
+      pubPolyLabelsGraph.publish( graphToMarkerArray(G3, 0.2) )
+      #pubPolyLabelsGraph.publish( graphToMarkerArrayByArea(G3, 0.2, list(range(-1,len(areaCosts)))) )
 
-    if pubDiv4.get_num_connections() > 0:
-      rospy.loginfo('Visualizing diverse path function 4...')
-      div4 = kDiversePathsBrandao(G, pstart, pgoal, k)
-      pubDiv4.publish( pathsToMarkerArray(G, div4, 0.9) )
+    # Running bencharks
+    if False:
+      rospy.loginfo("Running benchmarks for each problem type...")
+      benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaCosts", verbose=False, acceptable_dist=5.0)
+      benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts", verbose=False, acceptable_dist=5.0)
+      benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=5.0)
+      benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabels", verbose=False, acceptable_dist=5.0)
 
-    #if pubDiv5.get_num_connections() > 0:
-    #  rospy.loginfo('Visualizing diverse path function 5...')
-    #  div5 = kDiversePathsRRT(G, pstart, pgoal, k)
-    #  pubDiv5.publish( pathsToMarkerArray(G, div5, 0.9) )
+      rospy.loginfo("Running benchmark [polyLabelsInPath VS polyLabels] for maximum number of iterations...")
+      benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=0.0)
+      benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabels", verbose=False, acceptable_dist=0.0)
 
