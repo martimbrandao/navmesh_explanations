@@ -13,7 +13,7 @@ from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
 from recast_ros.srv import RecastProjectSrv, RecastProjectSrvRequest
 from recast_ros.msg import RecastGraph, RecastGraphNode
-from itertools import islice
+from itertools import islice, product
 from tabulate import tabulate
 
 
@@ -262,7 +262,7 @@ def optAreaCosts(graph, areaCosts, desiredPath, badPaths):
         line[ graph.nodes[desiredPath[i]]["area"] ] += d
       elif graph.nodes[desiredPath[i+1]]["portal"] == False:
         line[ graph.nodes[desiredPath[i+1]]["area"] ] += d
-    # - sum_(j in S_i) dist_j * ac_j
+    # - sum_(j in S) dist_j * ac_j
     for i in range(len(path)-1):
       d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
       if graph.nodes[path[i]]["portal"] == False:
@@ -331,7 +331,7 @@ def optPolyCosts(graph, desiredPath, badPaths):
         line[ graph.nodes[desiredPath[i]]["id"] ] += d
       elif graph.nodes[desiredPath[i+1]]["portal"] == False:
         line[ graph.nodes[desiredPath[i+1]]["id"] ] += d
-    # - sum_(j in S_i) dist_j * nc_j
+    # - sum_(j in S) dist_j * nc_j
     for i in range(len(path)-1):
       d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
       if graph.nodes[path[i]]["portal"] == False:
@@ -480,7 +480,7 @@ def optPolyLabels(graph, areaCosts, desiredPath, badPaths):
   h = []
   for path in badPaths:
     line = [0]*len(nodeLabelsHotEnc)
-    # sum_(j in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
+    # sum_(i in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
     for i in range(len(desiredPath)-1):
       d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
       if graph.nodes[desiredPath[i]]["portal"] == False:
@@ -489,7 +489,7 @@ def optPolyLabels(graph, areaCosts, desiredPath, badPaths):
       elif graph.nodes[desiredPath[i+1]]["portal"] == False:
         line[ graph.nodes[desiredPath[i+1]]["id"]*2   ] += d * areaCosts[1]
         line[ graph.nodes[desiredPath[i+1]]["id"]*2+1 ] += d * areaCosts[2]
-    # - sum_(j in S_i) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
+    # - sum_(i in S) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
     for i in range(len(path)-1):
       d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
       if graph.nodes[path[i]]["portal"] == False:
@@ -602,7 +602,7 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
   h = []
   for path in badPaths:
     line = [0]*len(nodeLabelsHotEnc)
-    # sum_(j in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
+    # sum_(i in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
     for i in range(len(desiredPath)-1):
       d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
       if graph.nodes[desiredPath[i]]["portal"] == False:
@@ -611,7 +611,7 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
       elif graph.nodes[desiredPath[i+1]]["portal"] == False:
         line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]   ] += d * areaCosts[1]
         line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]+1 ] += d * areaCosts[2]
-    # - sum_(j in S_i) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
+    # - sum_(i in S) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
     for i in range(len(path)-1):
       d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
       if graph.nodes[path[i]]["portal"] == False:
@@ -681,6 +681,119 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
     newGraph[edge[0]][edge[1]]["weight"] = cost * dist(newGraph.nodes[edge[0]]["point"], newGraph.nodes[edge[1]]["point"])
   return newPolyLabels, newGraph
 
+
+def optAreaLabels(graph, areaCosts, allowedAreaTypes, desiredPath, badPaths):
+  # variable:     l = labelSwitchHotEnc                                     # vector of all labels' new assigments using one-hot encoding (bool)
+  # cost:         (l-labelsSwitchHotEnc)^2
+  # constraints:  edgeCost_i = sum_(j) dist_i * ac_j * l_(oldlabel_i,j)     # for all edges i
+  #               sum_(j in B) edgeCost_j - sum_(j in S_i) edgeCost_j <= 0  # for all paths S_i
+  #               sum_(j) l_ij = 1                                          # for all labels i
+
+  # define variable
+  labelSwitchHotEnc = np.identity(len(allowedAreaTypes)).flatten()
+
+  # path cost constraints
+  G = []
+  h = []
+  for path in badPaths:
+    line = [0]*len(labelSwitchHotEnc)
+    # sum_(i in B) sum_(j) dist_i * ac_j * l_(oldlabel_i,j)
+    for i in range(len(desiredPath)-1):
+      d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
+      area = graph[desiredPath[i]][desiredPath[i+1]]["area"]
+      areaIdx = allowedAreaTypes.index(area)
+      for j in range(len(allowedAreaTypes)):
+        line[ areaIdx*len(allowedAreaTypes)+j ] += d * areaCosts[ allowedAreaTypes[j] ]
+    # - sum_(i in S) sum_(j) dist_i * ac_j * l_(oldlabel_i,j)
+    for i in range(len(path)-1):
+      d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
+      area = graph[path[i]][path[i+1]]["area"]
+      areaIdx = allowedAreaTypes.index(area)
+      for j in range(len(allowedAreaTypes)):
+        line[ areaIdx*len(allowedAreaTypes)+j ] -= d * areaCosts[ allowedAreaTypes[j] ]
+    G.append(line)
+    h.append(0)
+  G = np.array(G)
+  h = np.array(h)
+
+  # single active newlabel per oldlabel
+  A = []
+  b = []
+  for i in range(len(allowedAreaTypes)):
+    line = [1]*len(labelSwitchHotEnc)
+    A.append(line)
+    b.append(1)
+  A = np.array(A)
+  b = np.array(b)
+
+  # solve with cvxpy (soft constraints version)
+  x = cp.Variable(len(labelSwitchHotEnc), boolean=True)
+  cost = cp.norm1(x - np.array(labelSwitchHotEnc)) + 1 * cp.maximum(cp.max(G @ x - h), 0)
+  prob = cp.Problem(cp.Minimize(cost), [A @ x == b])
+  prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
+  sol = x.value
+
+  # get new labels and graph
+  newLabels = [0]*len(allowedAreaTypes)
+  newGraph = graph.copy()
+  for i in range(len(allowedAreaTypes)):
+    for j in range(len(allowedAreaTypes)):
+      if sol[i*len(allowedAreaTypes)+j]:
+        newLabels[i] = allowedAreaTypes[j]
+  for node in newGraph:
+    oldarea = graph.nodes[node]["area"]
+    if oldarea != -1:
+      oldareaIdx = allowedAreaTypes.index(oldarea)
+      newarea = newLabels[oldareaIdx]
+      newGraph.nodes[node]["area"] = newarea
+      newGraph.nodes[node]["cost"] = areaCosts[newarea]
+  for edge in list(newGraph.edges):
+    if newGraph.nodes[edge[0]]["cost"] != -1:
+      cost = newGraph.nodes[edge[0]]["cost"]
+      area = newGraph.nodes[edge[0]]["area"]
+    else:
+      cost = newGraph.nodes[edge[1]]["cost"]
+      area = newGraph.nodes[edge[1]]["area"]
+    newGraph[edge[0]][edge[1]]["area"] = area
+    newGraph[edge[0]][edge[1]]["cost"] = cost
+    newGraph[edge[0]][edge[1]]["weight"] = cost * dist(newGraph.nodes[edge[0]]["point"], newGraph.nodes[edge[1]]["point"])
+  return newLabels, newGraph
+
+
+def optAreaLabelsEnum(graph, areaCosts, allowedAreaTypes, desiredPath, badPaths):
+  # this will enumerate all area assignments and choose the one where the shortest path is closest to the desired
+
+  # fail for large number of area types (5 types is already 3000 combinations so ~1hr)
+  if len(allowedAreaTypes) > 5:
+    return allowedAreaTypes, graph.clone()
+
+  # solve with enumeration
+  assignments = list( product(range(len(allowedAreaTypes)), repeat=len(allowedAreaTypes)) )
+  mindist = float('Inf')
+  for assignment in assignments:
+    # new graph based on this assignment
+    agraph = graph.copy()
+    for edge in list(agraph.edges):
+      oldarea = agraph[edge[0]][edge[1]]["area"]
+      oldareaIdx = allowedAreaTypes.index(oldarea)
+      newarea = allowedAreaTypes[ assignment[oldareaIdx] ]
+      newcost = areaCosts[newarea]
+      agraph[edge[0]][edge[1]]["area"] = newarea
+      agraph[edge[0]][edge[1]]["cost"] = newcost
+      agraph[edge[0]][edge[1]]["weight"] = newcost * dist(agraph.nodes[edge[0]]["point"], agraph.nodes[edge[1]]["point"])
+    # compute shortest path distance
+    path = nx.shortest_path(agraph, source=desiredPath[0], target=desiredPath[-1], weight="weight")
+    d = pathDistance(desiredPath, path)
+    if d < mindist:
+      mindist = d
+      newGraph = agraph
+      newLabels = list(assignment)
+      for i in range(len(newLabels)):
+        newLabels[i] = allowedAreaTypes[ newLabels[i] ]
+  return newLabels, newGraph
+
+
+### path functions
 
 def pathDistance(path1, path2):
   edges1 = []
@@ -772,6 +885,8 @@ def kDiversePathsRRT(graph, start, goal, k):
   return paths
 
 
+### path explanations
+
 def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, diversity_method, num_alternatives, max_iter, verbose=True, acceptable_dist=0.0):
 
   if verbose:
@@ -823,6 +938,10 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
       x,newgraph = optPolyLabels(graph, area_costs, desired_path, all_alternative_paths)
     elif problem_type == "polyLabelsInPath":
       x,newgraph = optPolyLabelsInPath(graph, area_costs, desired_path, all_alternative_paths)
+    elif problem_type == "areaLabels":
+      x,newgraph = optAreaLabels(graph, area_costs, [1,2], desired_path, all_alternative_paths)
+    elif problem_type == "areaLabelsEnum":
+      x,newgraph = optAreaLabelsEnum(graph, area_costs, [1,2], desired_path, all_alternative_paths)
     time3 = time.clock()
 
     # compute new shortest path
@@ -1105,7 +1224,18 @@ if __name__ == "__main__":
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts", verbose=False, acceptable_dist=5.0)
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=5.0)
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabels", verbose=False, acceptable_dist=5.0)
+      benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", verbose=False, acceptable_dist=5.0)
 
+    if False:
+      rospy.loginfo("Running benchmark [polyLabelsInPath vs areaLabels] ...")
+      benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", verbose=False, acceptable_dist=5.0)
+      benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabels", verbose=False, acceptable_dist=5.0)
+      benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=5.0)
+      # note: - polyLabels expected to be better (provide better explanations) when desired path is not shortest
+      #       - need way to input desired path
+      #       - areaLabels expected to be faster for low number of area types
+
+    if False:
       rospy.loginfo("Running benchmark [polyLabelsInPath VS polyLabels] for maximum number of iterations...")
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=0.0)
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabels", verbose=False, acceptable_dist=0.0)

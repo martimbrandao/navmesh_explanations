@@ -41,6 +41,7 @@ TODO:
 - [ ] failure explanations
 
 MAYBE:
+- [ ] new objective function distance-from-shortest-to-desired-path?
 - [ ] better alternative to l1norm? how to promote in polyCosts that fewer edges are changed (only red ones in example)... perhaps through normalization see Boyd
 - [ ] compare k-shortest paths to: 1) random walks (RRTs); 2) diverse short paths (Voss 2015);
 - [ ] gaitmesh subdivide triangles
