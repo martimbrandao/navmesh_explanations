@@ -156,11 +156,16 @@ def graphToMarkerArray(graph, height):
       nodemarker3.points.append(newPoint(graph.nodes[node]["point"], height))
   # return
   graphmarkers = MarkerArray()
-  graphmarkers.markers.append(graphmarker1)
-  graphmarkers.markers.append(graphmarker2)
-  graphmarkers.markers.append(nodemarker1)
-  graphmarkers.markers.append(nodemarker2)
-  #graphmarkers.markers.append(nodemarker3)
+  if len(graphmarker1.points) > 0:
+    graphmarkers.markers.append(graphmarker1)
+  if len(graphmarker2.points) > 0:
+    graphmarkers.markers.append(graphmarker2)
+  if len(nodemarker1.points) > 0:
+    graphmarkers.markers.append(nodemarker1)
+  if len(nodemarker2.points) > 0:
+    graphmarkers.markers.append(nodemarker2)
+  #if len(nodemarker3.points) > 0:
+  #  graphmarkers.markers.append(nodemarker3)
   return graphmarkers
 
 
@@ -778,6 +783,12 @@ def optAreaLabelsEnum(graph, areaCosts, allowedAreaTypes, desiredPath, badPaths)
       oldareaIdx = allowedAreaTypes.index(oldarea)
       newarea = allowedAreaTypes[ assignment[oldareaIdx] ]
       newcost = areaCosts[newarea]
+      if agraph.nodes[edge[0]]["area"] != -1:
+        agraph.nodes[edge[0]]["area"] = newarea
+        agraph.nodes[edge[0]]["cost"] = newcost
+      if agraph.nodes[edge[1]]["area"] != -1:
+        agraph.nodes[edge[1]]["area"] = newarea
+        agraph.nodes[edge[1]]["cost"] = newcost
       agraph[edge[0]][edge[1]]["area"] = newarea
       agraph[edge[0]][edge[1]]["cost"] = newcost
       agraph[edge[0]][edge[1]]["weight"] = newcost * dist(agraph.nodes[edge[0]]["point"], agraph.nodes[edge[1]]["point"])
@@ -1059,6 +1070,8 @@ if __name__ == "__main__":
   pubPolyCostsGraph =  rospy.Publisher('expl_poly_costs_graph',  MarkerArray, queue_size=10)
   pubPolyLabelsPath =  rospy.Publisher('expl_poly_labels_path',  Marker,      queue_size=10)
   pubPolyLabelsGraph = rospy.Publisher('expl_poly_labels_graph', MarkerArray, queue_size=10)
+  pubAreaLabelsPath =  rospy.Publisher('expl_area_labels_path',  Marker,      queue_size=10)
+  pubAreaLabelsGraph = rospy.Publisher('expl_area_labels_graph', MarkerArray, queue_size=10)
 
   rospy.loginfo('Waiting for recast_ros...')
   rospy.wait_for_service('/recast_node/plan_path')
@@ -1215,7 +1228,14 @@ if __name__ == "__main__":
       # visualize
       pubPolyLabelsPath.publish( pathToMarker(G3, xpath3, 0, [1,0,0,1], 0.9) )
       pubPolyLabelsGraph.publish( graphToMarkerArray(G3, 0.2) )
-      #pubPolyLabelsGraph.publish( graphToMarkerArrayByArea(G3, 0.2, list(range(-1,len(areaCosts)))) )
+
+    if pubAreaLabelsPath.get_num_connections() > 0 or pubAreaLabelsGraph.get_num_connections() > 0:
+      rospy.loginfo("Computing explanation based on areaLabelsEnum...")
+      ok4, x4, G4 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", "kdp-brandao", 2, 10, verbose=False, acceptable_dist=3.0)
+      xpath4 = nx.shortest_path(G4, source=pstart, target=pgoal, weight="weight")
+      # visualize
+      pubAreaLabelsPath.publish( pathToMarker(G4, xpath4, 0, [1,0,0,1], 0.9) )
+      pubAreaLabelsGraph.publish( graphToMarkerArray(G4, 0.2) )
 
     # Running bencharks
     if False:
@@ -1231,9 +1251,10 @@ if __name__ == "__main__":
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", verbose=False, acceptable_dist=5.0)
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabels", verbose=False, acceptable_dist=5.0)
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=5.0)
-      # note: - polyLabels expected to be better (provide better explanations) when desired path is not shortest
-      #       - need way to input desired path
+      # note: - polyLabels expected to be better (provide better explanations i.e. distance-to-desired-path) when desired path is not shortest
+      #       - also better in terms of number of nodes/edges that changed label ("changed_vars" column)
       #       - areaLabels expected to be faster for low number of area types
+      #       - need way to input desired path
 
     if False:
       rospy.loginfo("Running benchmark [polyLabelsInPath VS polyLabels] for maximum number of iterations...")
