@@ -36,7 +36,7 @@ TODO:
 - [x] benchmark l1norm and number of changed nodes
 - [x] check whether optPolyLabels can find better solutions than optPolyLabelsInPath
 - [x] visualize graph costs
-- [ ] HAL paper baseline (switch all 0 labels to 1, vice-versa, etc.) ... could implement as integer problem (which newareatype to assign to each areatype)
+- [x] HAL paper baseline (switch all 0 labels to 1, vice-versa, etc.) ... could implement as integer problem (which newareatype to assign to each areatype)
 - [ ] recast2pddl (for evaluating tathagata's XAIP)
 - [ ] failure explanations
 
