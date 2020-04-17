@@ -246,6 +246,23 @@ def graphToMarkerArrayByCost(graph, height):
   #graphmarkers.markers.append(nodemarkerportals)
   return graphmarkers
 
+def getGraphChangesForVis(graph1, graph2):
+  gchanges = graph1.copy()
+  for node in graph1:
+    if graph1.nodes[node]["area"] == graph2.nodes[node]["area"]:
+      gchanges.nodes[node]["area"] = 1
+    else:
+      gchanges.nodes[node]["area"] = 2
+  changes = 0
+  for edge in list(graph1.edges):
+    if graph1[edge[0]][edge[1]]["area"] == graph2[edge[0]][edge[1]]["area"]:
+      gchanges[edge[0]][edge[1]]["area"] = 1
+    else:
+      gchanges[edge[0]][edge[1]]["area"] = 2
+      changes += 1
+  rospy.loginfo("edge area changes = %d" % changes)
+  return gchanges
+
 
 ### optimization
 
@@ -528,8 +545,8 @@ def optPolyLabels(graph, areaCosts, desiredPath, badPaths):
 
   # solve with cvxpy (soft constraints version)
   x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
-  #cost = cp.norm1(x - np.array(nodeLabelsHotEnc)) + 1 * cp.maximum(cp.max(G @ x - h), 0)
-  cost = cp.norm1(x - np.array(nodeLabelsHotEnc)) + 1 * cp.sum(G @ x - h)
+  cost = cp.norm1(x - np.array(nodeLabelsHotEnc)) + 1 * cp.maximum(cp.max(G @ x - h), 0)
+  #cost = cp.norm1(x - np.array(nodeLabelsHotEnc)) + 0.1 * cp.sum(G @ x - h)
   prob = cp.Problem(cp.Minimize(cost), [A @ x == b])
   prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
 
@@ -602,6 +619,7 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
         nodeLabelsHotEnc.append(0)
         nodeLabelsHotEnc.append(1)
         nodeList.append(node)
+  nodeLabelsHotEnc = np.array(nodeLabelsHotEnc)
 
   # path cost constraints
   G = []
@@ -651,8 +669,8 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
 
   # solve with cvxpy (soft constraints version)
   x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
-  #cost = cp.norm1(x - np.array(nodeLabelsHotEnc)) + 1 * cp.maximum(cp.max(G @ x - h), 0)
-  cost = cp.norm1(x - np.array(nodeLabelsHotEnc)) + 1 * cp.sum(G @ x - h)
+  cost = cp.norm1(x - nodeLabelsHotEnc) + 1 * cp.maximum(cp.max(G @ x - h), 0)  # requires many iterations or many badPaths, always has few changes and low (but non-zero) error
+  #cost = cp.norm1(x - nodeLabelsHotEnc) + 0.1 * cp.sum(G @ x - h)              # too many changed variables (so that cost of desired is as low as possible) but zero error
   prob = cp.Problem(cp.Minimize(cost), [A @ x == b])
   prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
 
@@ -935,7 +953,10 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
     elif diversity_method == "kdp-rrt":
       alternative_paths = kDiversePathsRRT(newgraph, start, goal, num_alternatives)
 
-    all_alternative_paths += alternative_paths
+    #all_alternative_paths += alternative_paths
+    for alternative_path in alternative_paths:
+      if alternative_path not in all_alternative_paths:
+        all_alternative_paths.append(alternative_path)
 
     # compute explanation
     time2 = time.clock()
@@ -1231,19 +1252,21 @@ if __name__ == "__main__":
       ok3, x3, G3, it3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", "kdp-brandao", 2, 10, verbose=False, acceptable_dist=3.0)
       xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
       # visualize
+      G3changes = getGraphChangesForVis(G, G3)
       pubPolyLabelsPath.publish( pathToMarker(G3, xpath3, 0, [1,0,0,1], 0.9) )
-      pubPolyLabelsGraph.publish( graphToMarkerArray(G3, 0.2) )
+      pubPolyLabelsGraph.publish( graphToMarkerArray(G3changes, 0.2) )
 
     if pubAreaLabelsPath.get_num_connections() > 0 or pubAreaLabelsGraph.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on areaLabelsEnum...")
       ok4, x4, G4, it4 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", "kdp-brandao", 2, 10, verbose=False, acceptable_dist=3.0)
       xpath4 = nx.shortest_path(G4, source=pstart, target=pgoal, weight="weight")
       # visualize
+      G4changes = getGraphChangesForVis(G, G4)
       pubAreaLabelsPath.publish( pathToMarker(G4, xpath4, 0, [1,0,0,1], 0.9) )
-      pubAreaLabelsGraph.publish( graphToMarkerArray(G4, 0.2) )
+      pubAreaLabelsGraph.publish( graphToMarkerArray(G4changes, 0.2) )
 
     # Running bencharks
-    if True:
+    if False:
       rospy.loginfo("Running benchmarks for each problem type...")
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaCosts", verbose=False, acceptable_dist=5.0)
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts", verbose=False, acceptable_dist=5.0)
@@ -1260,7 +1283,7 @@ if __name__ == "__main__":
       #       - areaLabels expected to be faster for low number of area types
       #       - need way to input desired path
 
-    if True:
+    if False:
       rospy.loginfo("Running benchmark [polyLabelsInPath VS polyLabels] for maximum number of iterations...")
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", verbose=False, acceptable_dist=0.0)
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=0.0)
