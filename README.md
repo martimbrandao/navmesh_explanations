@@ -38,13 +38,15 @@ TODO:
 - [x] visualize graph costs
 - [x] HAL paper baseline (switch all 0 labels to 1, vice-versa, etc.) ... could implement as integer problem (which newareatype to assign to each areatype)
 - [x] report vars_changed_perc, num_iter
+- [x] LASSO-style complexity-error trade-off plot
+- [x] better desired-path computation (e.g. apply lowest-cost areatype to all edges, compute shortest-path)
+- [ ] interface for providing desired waypoint (e.g. rviz with interactive marker)
 - [ ] recast2pddl (for evaluating tathagata's XAIP)
 - [ ] failure explanations
 
 MAYBE:
 - [ ] new objective function distance-from-shortest-to-desired-path?
 - [ ] better alternative to l1norm? elastic net (see wikipedia regression)? Boyd's alternative to L1?
-- [ ] LASSO-style complexity-error trade-off plot
 - [ ] dynamic reconfigure slide bar for "LASSO" regularizer (explanation fidelity)
 - [ ] compare k-shortest paths to: 1) random walks (RRTs); 2) diverse short paths (Voss 2015);
 - [ ] gaitmesh subdivide triangles
