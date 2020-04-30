@@ -1122,6 +1122,364 @@ def optPolyLabelsInPathTradeoff2(graph, areaCosts, desiredPath, badPaths):
     return lb_newPolyLabels, lb_newGraph
 
 
+def optPolyLabelsInPathTradeoff3(graph, areaCosts, desiredPath, badPaths):
+  # variable:     l = nodeLabelsHotEnc                                      # vector of *in-path* node area-labels using one-hot encoding (bool)
+  # cost:         (l-nodeLabelsHotEnc)^2
+  # constraints:  edgeCost_i = dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1    # for all edges i
+  #               sum_(j in B) edgeCost_j - sum_(j in S_i) edgeCost_j <= 0  # for all paths S_i
+  #               l_i + l_(i+1) = 1                                         # each node can have only one 1
+
+  auxgraph = graph.copy()
+
+  # define variable
+  nodeLabelsHotEnc = []
+  nodeList = []
+  for node in graph.nodes:
+    if graph.nodes[node]["area"] == -1:
+      continue
+    # check if this node is in any of the paths
+    inpath = False
+    if node in desiredPath:
+      inpath = True
+    if not inpath:
+      for badPath in badPaths:
+        if node in badPath:
+          inpath = True
+          break
+    # add variables
+    if inpath:
+      if graph.nodes[node]["area"] == 1:
+        auxgraph.nodes[node]["varidx"] = len(nodeLabelsHotEnc)
+        nodeLabelsHotEnc.append(1)
+        nodeLabelsHotEnc.append(0)
+        nodeList.append(node)
+      elif graph.nodes[node]["area"] == 2:
+        auxgraph.nodes[node]["varidx"] = len(nodeLabelsHotEnc)
+        nodeLabelsHotEnc.append(0)
+        nodeLabelsHotEnc.append(1)
+        nodeList.append(node)
+  nodeLabelsHotEnc = np.array(nodeLabelsHotEnc)
+
+  # path cost constraints
+  G = []
+  h = []
+  for path in badPaths:
+    line = [0]*len(nodeLabelsHotEnc)
+    # sum_(i in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
+    for i in range(len(desiredPath)-1):
+      d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
+      if graph.nodes[desiredPath[i]]["portal"] == False:
+        line[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] += d * areaCosts[1]
+        line[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] += d * areaCosts[2]
+      elif graph.nodes[desiredPath[i+1]]["portal"] == False:
+        line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]   ] += d * areaCosts[1]
+        line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]+1 ] += d * areaCosts[2]
+    # - sum_(i in S) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
+    for i in range(len(path)-1):
+      d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
+      if graph.nodes[path[i]]["portal"] == False:
+        line[ auxgraph.nodes[path[i]]["varidx"]   ] -= d * areaCosts[1]
+        line[ auxgraph.nodes[path[i]]["varidx"]+1 ] -= d * areaCosts[2]
+      elif graph.nodes[path[i+1]]["portal"] == False:
+        line[ auxgraph.nodes[path[i+1]]["varidx"]   ] -= d * areaCosts[1]
+        line[ auxgraph.nodes[path[i+1]]["varidx"]+1 ] -= d * areaCosts[2]
+    G.append(line)
+    h.append(0)
+  G = np.array(G)
+  h = np.array(h)
+
+  # single active label per node
+  A = []
+  b = []
+  for i in range(len(nodeList)):
+    line = [0]*len(nodeLabelsHotEnc)
+    line[2*i  ] = 1
+    line[2*i+1] = 1
+    A.append(line)
+    b.append(1)
+  A = np.array(A)
+  b = np.array(b)
+
+  # weights (by area, and penalize not-on-path)
+  weights = [1]*len(nodeLabelsHotEnc)
+  if False:
+    for i in range(len(desiredPath)):
+      if graph.nodes[desiredPath[i]]["portal"] == False:
+        if i == 0:
+          d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
+          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] = d
+          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] = d
+        elif i == len(desiredPath)-1:
+          d = dist(graph.nodes[desiredPath[i-1]]["point"], graph.nodes[desiredPath[i]]["point"])
+          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] = d
+          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] = d
+        else:
+          d1 = dist(graph.nodes[desiredPath[i-1]]["point"], graph.nodes[desiredPath[i]]["point"])
+          d2 = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
+          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] = d1 + d2
+          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] = d1 + d2
+    for path in badPaths:
+      for i in range(len(path)):
+        if graph.nodes[path[i]]["portal"] == False:
+          if i == 0:
+            d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
+            weights[ auxgraph.nodes[path[i]]["varidx"]   ] = d
+            weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d
+          elif i == len(path)-1:
+            d = dist(graph.nodes[path[i-1]]["point"], graph.nodes[path[i]]["point"])
+            weights[ auxgraph.nodes[path[i]]["varidx"]   ] = d
+            weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d
+          else:
+            d1 = dist(graph.nodes[path[i-1]]["point"], graph.nodes[path[i]]["point"])
+            d2 = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
+            weights[ auxgraph.nodes[path[i]]["varidx"]   ] = d1 + d2
+            weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d1 + d2
+  if False:
+    for i in range(len(nodeList)):
+      if nodeList[i] not in desiredPath:
+        weights[2*i  ] *= 10
+        weights[2*i+1] *= 10
+
+  # solve with cvxpy (hard constraints version ... has problems when it is impossible that the desired path is shortest)
+  #x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
+  #cost = cp.sum_squares(x - np.array(nodeLabelsHotEnc))
+  #prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, A @ x == b])
+  #prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={"MSK_DPAR_MIO_MAX_TIME":300})
+
+  # solve with cvxpy (soft constraints version)
+  x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
+  #cost = cp.norm1(x - nodeLabelsHotEnc) + 1 * cp.maximum(cp.max(G @ x - h), 0)  # requires many iterations or many badPaths, always has few changes and low (but non-zero) error
+  #cost = cp.norm1(x - nodeLabelsHotEnc) + 0.1 * cp.sum(G @ x - h)              # too many changed variables (so that cost of desired is as low as possible) but zero error
+  #prob = cp.Problem(cp.Minimize(cost), [A @ x == b])
+  #prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
+
+  # costL1 lb
+  cost = cp.norm1(cp.multiply(x - nodeLabelsHotEnc, weights))
+  prob = cp.Problem(cp.Minimize(cost), [A @ x == b])
+  prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
+  costL1_lb = np.linalg.norm(np.multiply(x.value - nodeLabelsHotEnc, weights), 1)
+
+  # costL1 ub
+  cost = cp.sum(G @ x - h)
+  prob = cp.Problem(cp.Minimize(cost), [A @ x == b])
+  prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
+  costL1_ub = np.linalg.norm(np.multiply(x.value - nodeLabelsHotEnc, weights), 1)
+
+  # trade-off curve
+  tradeoffs = []
+  curve_dist = []
+  curve_l1 = []
+  curve_newgraph = []
+  curve_newpolylabels = []
+  for tradeoff in np.linspace(0,1,51):
+    # solve with desired trade-off
+    cost = cp.sum(G @ x - h)
+    prob = cp.Problem(cp.Minimize(cost), [A @ x == b, cp.norm1(cp.multiply(x - nodeLabelsHotEnc, weights)) <= costL1_lb + (costL1_ub - costL1_lb) * tradeoff])
+    result = prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
+    if result == float('inf'):
+      rospy.loginfo("failed")
+      continue
+    # get new graph/labels
+    newPolyLabels, newGraph = getPolyLabelsAndGraph(x, graph, nodeList, areaCosts)
+    # save
+    curve_newgraph.append(newGraph)
+    curve_newpolylabels.append(newPolyLabels)
+    # save tradeoff
+    tradeoffs.append(tradeoff)
+    # get distance
+    path = nx.shortest_path(newGraph, source=desiredPath[0], target=desiredPath[-1], weight="weight")
+    curve_dist.append(pathDistance(desiredPath, path))
+    # get L1norm
+    curve_l1.append(np.linalg.norm(x.value - nodeLabelsHotEnc, 1))
+
+  # plot curve
+  plt.figure(1)
+  plt.clf()
+
+  plt.subplot(121)
+  plt.plot(tradeoffs, curve_dist, 'r', label="distance")
+  plt.plot(tradeoffs, curve_l1, 'b', label="L1")
+  plt.legend()
+  plt.xlabel("alpha")
+  plt.ylabel("distance")
+
+  plt.subplot(122)
+  plt.plot(curve_l1, curve_dist)
+  plt.xlabel("L1")
+  plt.ylabel("distance")
+
+  #plt.draw()
+  #plt.pause(0.001)
+  plt.show()
+
+  # best solution
+  mindist = min(curve_dist)
+  idx = np.where(curve_dist <= mindist+6)[0][0]
+  return curve_newpolylabels[idx], curve_newgraph[idx]
+
+def optPolyLabelsInPathWithL1Target(graph, areaCosts, desiredPath, badPaths, l1):
+  # variable:     l = nodeLabelsHotEnc                                      # vector of *in-path* node area-labels using one-hot encoding (bool)
+  # cost:         (l-nodeLabelsHotEnc)^2
+  # constraints:  edgeCost_i = dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1    # for all edges i
+  #               sum_(j in B) edgeCost_j - sum_(j in S_i) edgeCost_j <= 0  # for all paths S_i
+  #               l_i + l_(i+1) = 1                                         # each node can have only one 1
+
+  auxgraph = graph.copy()
+
+  # define variable
+  nodeLabelsHotEnc = []
+  nodeList = []
+  for node in graph.nodes:
+    if graph.nodes[node]["area"] == -1:
+      continue
+    # check if this node is in any of the paths
+    inpath = False
+    if node in desiredPath:
+      inpath = True
+    if not inpath:
+      for badPath in badPaths:
+        if node in badPath:
+          inpath = True
+          break
+    # add variables
+    if inpath:
+      if graph.nodes[node]["area"] == 1:
+        auxgraph.nodes[node]["varidx"] = len(nodeLabelsHotEnc)
+        nodeLabelsHotEnc.append(1)
+        nodeLabelsHotEnc.append(0)
+        nodeList.append(node)
+      elif graph.nodes[node]["area"] == 2:
+        auxgraph.nodes[node]["varidx"] = len(nodeLabelsHotEnc)
+        nodeLabelsHotEnc.append(0)
+        nodeLabelsHotEnc.append(1)
+        nodeList.append(node)
+  nodeLabelsHotEnc = np.array(nodeLabelsHotEnc)
+
+  # path cost constraints
+  G = []
+  h = []
+  for path in badPaths:
+    line = [0]*len(nodeLabelsHotEnc)
+    # sum_(i in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
+    for i in range(len(desiredPath)-1):
+      d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
+      if graph.nodes[desiredPath[i]]["portal"] == False:
+        line[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] += d * areaCosts[1]
+        line[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] += d * areaCosts[2]
+      elif graph.nodes[desiredPath[i+1]]["portal"] == False:
+        line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]   ] += d * areaCosts[1]
+        line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]+1 ] += d * areaCosts[2]
+    # - sum_(i in S) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
+    for i in range(len(path)-1):
+      d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
+      if graph.nodes[path[i]]["portal"] == False:
+        line[ auxgraph.nodes[path[i]]["varidx"]   ] -= d * areaCosts[1]
+        line[ auxgraph.nodes[path[i]]["varidx"]+1 ] -= d * areaCosts[2]
+      elif graph.nodes[path[i+1]]["portal"] == False:
+        line[ auxgraph.nodes[path[i+1]]["varidx"]   ] -= d * areaCosts[1]
+        line[ auxgraph.nodes[path[i+1]]["varidx"]+1 ] -= d * areaCosts[2]
+    G.append(line)
+    h.append(0)
+  G = np.array(G)
+  h = np.array(h)
+
+  # single active label per node
+  A = []
+  b = []
+  for i in range(len(nodeList)):
+    line = [0]*len(nodeLabelsHotEnc)
+    line[2*i  ] = 1
+    line[2*i+1] = 1
+    A.append(line)
+    b.append(1)
+  A = np.array(A)
+  b = np.array(b)
+
+  # weights (by area, and penalize not-on-path)
+  weights = [1]*len(nodeLabelsHotEnc)
+  if True:
+    for i in range(len(desiredPath)):
+      if graph.nodes[desiredPath[i]]["portal"] == False:
+        if i == 0:
+          d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
+          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] = d
+          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] = d
+        elif i == len(desiredPath)-1:
+          d = dist(graph.nodes[desiredPath[i-1]]["point"], graph.nodes[desiredPath[i]]["point"])
+          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] = d
+          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] = d
+        else:
+          d1 = dist(graph.nodes[desiredPath[i-1]]["point"], graph.nodes[desiredPath[i]]["point"])
+          d2 = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
+          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] = d1 + d2
+          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] = d1 + d2
+    for path in badPaths:
+      for i in range(len(path)):
+        if graph.nodes[path[i]]["portal"] == False:
+          if i == 0:
+            d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
+            weights[ auxgraph.nodes[path[i]]["varidx"]   ] = d
+            weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d
+          elif i == len(path)-1:
+            d = dist(graph.nodes[path[i-1]]["point"], graph.nodes[path[i]]["point"])
+            weights[ auxgraph.nodes[path[i]]["varidx"]   ] = d
+            weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d
+          else:
+            d1 = dist(graph.nodes[path[i-1]]["point"], graph.nodes[path[i]]["point"])
+            d2 = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
+            weights[ auxgraph.nodes[path[i]]["varidx"]   ] = d1 + d2
+            weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d1 + d2
+  if False:
+    for i in range(len(nodeList)):
+      if nodeList[i] not in desiredPath:
+        weights[2*i  ] *= 10
+        weights[2*i+1] *= 10
+
+  # solve with cvxpy (soft constraints version)
+  x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
+  cost = cp.sum(G @ x - h)
+  prob = cp.Problem(cp.Minimize(cost), [A @ x == b, cp.norm1(cp.multiply(x - nodeLabelsHotEnc, weights)) <= l1])
+  result = prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
+  if result == float('inf'):
+    rospy.loginfo("failed")
+    newPolyLabels = [0]*len(graph.nodes)
+    for node in graph:
+      newPolyLabels[ graph.nodes[node]["id"] ] = graph.nodes[node]["area"]
+    return newPolyLabels, graph.copy()
+  # get new graph/labels
+  return getPolyLabelsAndGraph(x, graph, nodeList, areaCosts)
+
+
+def optPolyLabelsInPathTradeoff4(graph, areaCosts, desiredPath, verbose):
+  # trade-off curve
+  curve_dist = []
+  curve_l1 = []
+  curve_newgraph = []
+  curve_newpolylabels = []
+  for l1 in np.linspace(1,81,21):
+    rospy.loginfo("Computing best explanation with L1 <= %f ...." % l1)
+    ok, x, G, it = computeExplanationISP(graph, desiredPath[0], desiredPath[-1], areaCosts, desiredPath, "polyLabelsInPathWithL1Target", "kdp-brandao", 5, 10, verbose=verbose, acceptable_dist=0.0, args=l1)
+    # save
+    curve_newgraph.append(G)
+    curve_newpolylabels.append(x)
+    curve_l1.append(l1)
+    # get distance
+    path = nx.shortest_path(G, source=desiredPath[0], target=desiredPath[-1], weight="weight")
+    curve_dist.append(pathDistance(desiredPath, path))
+  # plot curve
+  if verbose:
+    plt.figure(1)
+    plt.clf()
+    plt.plot(curve_l1, curve_dist, marker='.')
+    plt.xlabel("L1")
+    plt.ylabel("distance")
+    plt.show()
+  # return best solution
+  mindist = min(curve_dist)
+  idx = np.where(curve_dist <= mindist)[0][0]
+  return curve_newpolylabels[idx], curve_newgraph[idx]
+
+
 def optAreaLabels(graph, areaCosts, allowedAreaTypes, desiredPath, badPaths):
   # variable:     l = labelSwitchHotEnc                                     # vector of all labels' new assigments using one-hot encoding (bool)
   # cost:         (l-labelsSwitchHotEnc)^2
@@ -1334,7 +1692,7 @@ def kDiversePathsRRT(graph, start, goal, k):
 
 ### path explanations
 
-def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, diversity_method, num_alternatives, max_iter, verbose=True, acceptable_dist=0.0):
+def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, diversity_method, num_alternatives, max_iter, verbose=True, acceptable_dist=0.0, args=[]):
 
   if verbose:
     rospy.loginfo("Computing explanation type %s, using %d %s-diverse paths and %d iterations..." % (problem_type, num_alternatives, diversity_method, max_iter))
@@ -1390,6 +1748,12 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
       x,newgraph = optPolyLabelsInPath(graph, area_costs, desired_path, all_alternative_paths)
     elif problem_type == "polyLabelsInPathTradeoff":
       x,newgraph = optPolyLabelsInPathTradeoff(graph, area_costs, desired_path, all_alternative_paths)
+    elif problem_type == "polyLabelsInPathTradeoff2":
+      x,newgraph = optPolyLabelsInPathTradeoff2(graph, area_costs, desired_path, all_alternative_paths)
+    elif problem_type == "polyLabelsInPathTradeoff3":
+      x,newgraph = optPolyLabelsInPathTradeoff3(graph, area_costs, desired_path, all_alternative_paths)
+    elif problem_type == "polyLabelsInPathWithL1Target":
+      x,newgraph = optPolyLabelsInPathWithL1Target(graph, area_costs, desired_path, all_alternative_paths, args)
     elif problem_type == "areaLabels":
       x,newgraph = optAreaLabels(graph, area_costs, [1,2], desired_path, all_alternative_paths)
     elif problem_type == "areaLabelsEnum":
@@ -1671,9 +2035,18 @@ if __name__ == "__main__":
       pubPolyCostsPath.publish( pathToMarker(G2, xpath2, 0, [1,0,0,1], 0.9) )
       pubPolyCostsGraph.publish( graphToMarkerArrayByCost(G2, 0.2) )
 
+    #if pubPolyLabelsPath.get_num_connections() > 0 or pubPolyLabelsGraph.get_num_connections() > 0:
+    #  rospy.loginfo("Computing explanation based on polyLabelsInPath...")
+    #  ok3, x3, G3, it3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPathTradeoff", "kdp-brandao", 5, 10, verbose=True, acceptable_dist=1.0)
+    #  xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
+    #  # visualize
+    #  G3changes = getGraphChangesForVis(G, G3)
+    #  pubPolyLabelsPath.publish( pathToMarker(G3, xpath3, 0, [1,0,0,1], 0.9) )
+    #  pubPolyLabelsGraph.publish( graphToMarkerArray(G3changes, 0.2) )
+
     if pubPolyLabelsPath.get_num_connections() > 0 or pubPolyLabelsGraph.get_num_connections() > 0:
-      rospy.loginfo("Computing explanation based on polyLabelsInPath...")
-      ok3, x3, G3, it3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", "kdp-brandao", 2, 10, verbose=False, acceptable_dist=3.0)
+      rospy.loginfo("Computing explanation trade-offs based on polyLabelsInPath...")
+      x3, G3 = optPolyLabelsInPathTradeoff4(G, areaCosts, gpath_desired, verbose=True)
       xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
       # visualize
       G3changes = getGraphChangesForVis(G, G3)
