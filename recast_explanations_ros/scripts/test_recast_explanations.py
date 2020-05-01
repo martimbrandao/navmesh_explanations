@@ -4,11 +4,14 @@ import networkx as nx
 import numpy as np
 import cvxpy as cp
 import similaritymeasures
+import matplotlib
 import matplotlib.pyplot as plt
 import time
 import random
 import pdb
 import rospy
+from dynamic_reconfigure.server import Server
+from recast_explanations_ros.cfg import ExplanationsConfig
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
 from recast_ros.srv import RecastProjectSrv, RecastProjectSrvRequest
@@ -1467,14 +1470,6 @@ def optPolyLabelsInPathTradeoff4(graph, areaCosts, desiredPath, verbose):
     # get distance
     path = nx.shortest_path(G, source=desiredPath[0], target=desiredPath[-1], weight="weight")
     curve_dist.append(pathDistance(desiredPath, path))
-  # plot curve
-  if verbose:
-    plt.figure(1)
-    plt.clf()
-    plt.plot(curve_l1, curve_dist, marker='.')
-    plt.xlabel("L1")
-    plt.ylabel("distance")
-    plt.show()
   return curve_newpolylabels, curve_newgraph, curve_dist, curve_l1
 
 
@@ -1850,6 +1845,32 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
   rospy.loginfo("Results:\n" + str(tabulate(results, headers="keys")))
 
 
+### callback
+
+tradeoff_visualized_index = None
+tradeoff_maxL1 = None
+
+def callback(config, level):
+  global tradeoff_visualized_index, tradeoff_maxL1
+  rospy.loginfo("""Reconfigure Request: {tradeoff_visualized_index}, {tradeoff_maxL1}""".format(**config))
+  tradeoff_visualized_index = config.tradeoff_visualized_index
+  tradeoff_maxL1 = config.tradeoff_maxL1
+  return config
+
+
+### visualization
+
+def mypause(interval):
+  backend = plt.rcParams['backend']
+  if backend in matplotlib.rcsetup.interactive_bk:
+    figManager = matplotlib._pylab_helpers.Gcf.get_active()
+    if figManager is not None:
+      canvas = figManager.canvas
+      if canvas.figure.stale:
+        canvas.draw()
+      canvas.start_event_loop(interval)
+      return
+
 ### main
 
 if __name__ == "__main__":
@@ -1882,6 +1903,8 @@ if __name__ == "__main__":
   pubTradeoffPolyLabelsPath =  rospy.Publisher('expl_tradeoff_poly_labels_path',  Marker,      queue_size=10)
   pubTradeoffPolyLabelsGraph = rospy.Publisher('expl_tradeoff_poly_labels_graph', MarkerArray, queue_size=10)
 
+  srv = Server(ExplanationsConfig, callback)
+
   rospy.loginfo('Waiting for recast_ros...')
   rospy.wait_for_service('/recast_node/plan_path')
   rospy.wait_for_service('/recast_node/project_point')
@@ -1894,6 +1917,15 @@ if __name__ == "__main__":
   old_areaCosts = None
   old_pstart = None
   old_pgoal = None
+
+  # prepare plots
+  show_tradeoff = True
+  if show_tradeoff:
+    plt.ion()
+    fig = plt.figure()
+    plt.xlabel("L1")
+    plt.ylabel("distance")
+    plt.show(block=False)
 
   # loop
   rate = rospy.Rate(1.0) # hz
@@ -2078,23 +2110,38 @@ if __name__ == "__main__":
       pubAreaLabelsGraph.publish( graphToMarkerArray(G4changes, 0.2) )
 
     # trade-off curve
-    if old_rosgraph != rosgraph or old_areaCosts != areaCosts or old_pstart != pstart or old_pgoal != pgoal:
-      # compute
-      rospy.loginfo("Computing explanation trade-offs based on polyLabelsInPath...")
-      xto_vec, Gto_vec, distto_vec, l1to_vec = optPolyLabelsInPathTradeoff4(G, areaCosts, gpath_desired, verbose=True)
-      xpathto_vec = []
-      for Gto in Gto_vec:
-        xpathto = nx.shortest_path(Gto, source=pstart, target=pgoal, weight="weight")
-        xpathto_vec.append(xpathto)
-    # pick index to visualize... TODO: dynamic reconfigure
-    idx = np.where(distto_vec <= min(distto_vec))[0][0]
-    Gto = Gto_vec[idx]
-    xpathto = xpathto_vec[idx]
-    # visualize
-    if pubTradeoffPolyLabelsPath.get_num_connections() > 0 or pubTradeoffPolyLabelsGraph.get_num_connections() > 0:
-      Gtochanges = getGraphChangesForVis(G, Gto)
-      pubTradeoffPolyLabelsPath.publish( pathToMarker(Gto, xpathto, 0, [1,0,0,1], 0.9) )
-      pubTradeoffPolyLabelsGraph.publish( graphToMarkerArray(Gtochanges, 0.2) )
+    if show_tradeoff:
+      if old_rosgraph != rosgraph or old_areaCosts != areaCosts or old_pstart != pstart or old_pgoal != pgoal:
+        # compute
+        rospy.loginfo("Computing explanation trade-offs based on polyLabelsInPath...")
+        to_x_vec, to_G_vec, to_dist_vec, to_l1_vec = optPolyLabelsInPathTradeoff4(G, areaCosts, gpath_desired, verbose=True)
+        to_path_marker_vec = []
+        to_graph_marker_vec = []
+        for to_G in to_G_vec:
+          to_xpath = nx.shortest_path(to_G, source=pstart, target=pgoal, weight="weight")
+          to_Gchanges = getGraphChangesForVis(G, to_G)
+          to_path_marker_vec.append( pathToMarker(to_G, to_xpath, 0, [1,0,0,1], 0.9) )
+          to_graph_marker_vec.append( graphToMarkerArray(to_Gchanges, 0.2) )
+      # pick index from dynamic reconfigure
+      idx = tradeoff_visualized_index
+      # show curve
+      rospy.loginfo("Showing trade-off curve...")
+      plt.gca().clear()
+      plt.plot(to_l1_vec, to_dist_vec, marker='.')
+      plt.plot(to_l1_vec[idx], to_dist_vec[idx], 'r', marker='o')
+      mypause(0.001)
+      #plt.xlabel("L1")
+      #plt.ylabel("distance")
+      #fig.canvas.draw()
+      #fig.canvas.flush_events()
+      rospy.loginfo("Visualizing selected point...")
+      # visualize
+      if pubTradeoffPolyLabelsPath.get_num_connections() > 0 or pubTradeoffPolyLabelsGraph.get_num_connections() > 0:
+        to_path_marker_vec[idx].header.stamp = rospy.Time.now()
+        for marker in to_graph_marker_vec[idx].markers:
+          marker.header.stamp = rospy.Time.now()
+        pubTradeoffPolyLabelsPath.publish( to_path_marker_vec[idx] )
+        pubTradeoffPolyLabelsGraph.publish( to_graph_marker_vec[idx] )
 
     # Running bencharks
     if False:

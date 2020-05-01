@@ -25,6 +25,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   roslib
   rospy
+  dynamic_reconfigure
   std_msgs
   geometry_msgs
   visualization_msgs
@@ -47,6 +48,7 @@ find_package(catkin REQUIRED COMPONENTS
 #endmacro(use_cxx11)
 #use_cxx11()
 
+include_directories(${dynamic_reconfigure_PACKAGE_PATH}/cmake/cfgbuild.cmake)
 
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
@@ -114,6 +116,9 @@ find_package(catkin REQUIRED COMPONENTS
 ##     and list every .cfg file to be processed
 
 ## Generate dynamic reconfigure parameters in the 'cfg' folder
+generate_dynamic_reconfigure_options(
+  cfg/Explanations.cfg
+)
 
 ###################################
 ## catkin specific configuration ##
@@ -126,7 +131,7 @@ find_package(catkin REQUIRED COMPONENTS
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
 #  INCLUDE_DIRS include
-#  LIBRARIES wabian_planner
+#  LIBRARIES recast_explanations_ros
   CATKIN_DEPENDS roscpp roslib rospy std_msgs geometry_msgs visualization_msgs
 #  DEPENDS system_lib
 )
@@ -148,7 +153,7 @@ include_directories(
 ## Add cmake target dependencies of the library
 ## as an example, code may need to be generated before libraries
 ## either from message generation or dynamic reconfigure
-# add_dependencies(wabian_planner ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+# add_dependencies(recast_explanations_ros ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 
 #############
@@ -166,7 +171,7 @@ include_directories(
 # )
 
 ## Mark executables and/or libraries for installation
-# install(TARGETS wabian_planner wabian_planner_node
+# install(TARGETS recast_explanations_ros recast_explanations_ros_node
 #   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
 #   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
 #   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -191,7 +196,7 @@ include_directories(
 #############
 
 ## Add gtest based cpp test target and link libraries
-# catkin_add_gtest(${PROJECT_NAME}-test test/test_wabian_planner.cpp)
+# catkin_add_gtest(${PROJECT_NAME}-test test/test_recast_explanations_ros.cpp)
 # if(TARGET ${PROJECT_NAME}-test)
 #   target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME})
 # endif()
