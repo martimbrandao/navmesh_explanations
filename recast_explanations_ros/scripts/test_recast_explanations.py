@@ -1457,7 +1457,8 @@ def optPolyLabelsInPathTradeoff4(graph, areaCosts, desiredPath, verbose):
   curve_newgraph = []
   curve_newpolylabels = []
   for l1 in np.linspace(1,81,21):
-    rospy.loginfo("Computing best explanation with L1 <= %f ...." % l1)
+    if verbose:
+      rospy.loginfo("Computing best explanation with L1 <= %f ...." % l1)
     ok, x, G, it = computeExplanationISP(graph, desiredPath[0], desiredPath[-1], areaCosts, desiredPath, "polyLabelsInPathWithL1Target", "kdp-brandao", 5, 10, verbose=verbose, acceptable_dist=0.0, args=l1)
     # save
     curve_newgraph.append(G)
@@ -1474,10 +1475,7 @@ def optPolyLabelsInPathTradeoff4(graph, areaCosts, desiredPath, verbose):
     plt.xlabel("L1")
     plt.ylabel("distance")
     plt.show()
-  # return best solution
-  mindist = min(curve_dist)
-  idx = np.where(curve_dist <= mindist)[0][0]
-  return curve_newpolylabels[idx], curve_newgraph[idx]
+  return curve_newpolylabels, curve_newgraph, curve_dist, curve_l1
 
 
 def optAreaLabels(graph, areaCosts, allowedAreaTypes, desiredPath, badPaths):
@@ -1877,12 +1875,25 @@ if __name__ == "__main__":
   pubPolyCostsGraph =  rospy.Publisher('expl_poly_costs_graph',  MarkerArray, queue_size=10)
   pubPolyLabelsPath =  rospy.Publisher('expl_poly_labels_path',  Marker,      queue_size=10)
   pubPolyLabelsGraph = rospy.Publisher('expl_poly_labels_graph', MarkerArray, queue_size=10)
+  pubPolyLabels4Path = rospy.Publisher('expl_poly_labels4_path',  Marker,      queue_size=10)
+  pubPolyLabels4Graph =rospy.Publisher('expl_poly_labels4_graph', MarkerArray, queue_size=10)
   pubAreaLabelsPath =  rospy.Publisher('expl_area_labels_path',  Marker,      queue_size=10)
   pubAreaLabelsGraph = rospy.Publisher('expl_area_labels_graph', MarkerArray, queue_size=10)
+  pubTradeoffPolyLabelsPath =  rospy.Publisher('expl_tradeoff_poly_labels_path',  Marker,      queue_size=10)
+  pubTradeoffPolyLabelsGraph = rospy.Publisher('expl_tradeoff_poly_labels_graph', MarkerArray, queue_size=10)
 
   rospy.loginfo('Waiting for recast_ros...')
   rospy.wait_for_service('/recast_node/plan_path')
   rospy.wait_for_service('/recast_node/project_point')
+
+  rosgraph = None
+  areaCosts = None
+  pstart = None
+  pgoal = None
+  old_rosgraph = None
+  old_areaCosts = None
+  old_pstart = None
+  old_pgoal = None
 
   # loop
   rate = rospy.Rate(1.0) # hz
@@ -1890,6 +1901,16 @@ if __name__ == "__main__":
     rate.sleep()
 
     rospy.loginfo('=======================================================')
+
+    # keep old data
+    if rosgraph is not None:
+      old_rosgraph = rosgraph
+    if areaCosts is not None:
+      old_areaCosts = areaCosts.copy()
+    if pstart is not None:
+      old_pstart = pstart
+    if pgoal is not None:
+      old_pgoal = pgoal
 
     # get area costs
     rospy.loginfo('Getting area costs...')
@@ -1942,13 +1963,6 @@ if __name__ == "__main__":
     # closest nodes to start/goal
     pstart = getKey(rospath_centers[0])
     pgoal = getKey(rospath_centers[-1])
-
-    # debug
-    if debug:
-      rospy.loginfo('start    = \n' + str(rospath_centers[0]))
-      rospy.loginfo('goal     = \n' + str(rospath_centers[-1]))
-      rospy.loginfo('my start = \n' + str(pstart))
-      rospy.loginfo('my goal  = \n' + str(pgoal))
 
     # path on graph
     rospy.loginfo('Solving shortest path on our local graph...')
@@ -2035,23 +2049,24 @@ if __name__ == "__main__":
       pubPolyCostsPath.publish( pathToMarker(G2, xpath2, 0, [1,0,0,1], 0.9) )
       pubPolyCostsGraph.publish( graphToMarkerArrayByCost(G2, 0.2) )
 
-    #if pubPolyLabelsPath.get_num_connections() > 0 or pubPolyLabelsGraph.get_num_connections() > 0:
-    #  rospy.loginfo("Computing explanation based on polyLabelsInPath...")
-    #  ok3, x3, G3, it3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPathTradeoff", "kdp-brandao", 5, 10, verbose=True, acceptable_dist=1.0)
-    #  xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
-    #  # visualize
-    #  G3changes = getGraphChangesForVis(G, G3)
-    #  pubPolyLabelsPath.publish( pathToMarker(G3, xpath3, 0, [1,0,0,1], 0.9) )
-    #  pubPolyLabelsGraph.publish( graphToMarkerArray(G3changes, 0.2) )
-
     if pubPolyLabelsPath.get_num_connections() > 0 or pubPolyLabelsGraph.get_num_connections() > 0:
-      rospy.loginfo("Computing explanation trade-offs based on polyLabelsInPath...")
-      x3, G3 = optPolyLabelsInPathTradeoff4(G, areaCosts, gpath_desired, verbose=True)
+      rospy.loginfo("Computing explanation based on polyLabelsInPath...")
+      ok3, x3, G3, it3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", "kdp-brandao", 2, 10, verbose=True, acceptable_dist=1.0)
       xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
       # visualize
       G3changes = getGraphChangesForVis(G, G3)
       pubPolyLabelsPath.publish( pathToMarker(G3, xpath3, 0, [1,0,0,1], 0.9) )
       pubPolyLabelsGraph.publish( graphToMarkerArray(G3changes, 0.2) )
+
+    if pubPolyLabels4Path.get_num_connections() > 0 or pubPolyLabels4Graph.get_num_connections() > 0:
+      rospy.loginfo("Computing explanation based on polyLabelsInPathTradeoff4...")
+      xto_vec, Gto_vec, distto_vec, l1to_vec = optPolyLabelsInPathTradeoff4(G, areaCosts, gpath_desired, verbose=False)
+      G3 = Gto_vec[ np.where(distto_vec <= min(distto_vec))[0][0] ]
+      xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
+      # visualize
+      G3changes = getGraphChangesForVis(G, G3)
+      pubPolyLabels4Path.publish( pathToMarker(G3, xpath3, 0, [1,0,0,1], 0.9) )
+      pubPolyLabels4Graph.publish( graphToMarkerArray(G3changes, 0.2) )
 
     if pubAreaLabelsPath.get_num_connections() > 0 or pubAreaLabelsGraph.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on areaLabelsEnum...")
@@ -2061,6 +2076,25 @@ if __name__ == "__main__":
       G4changes = getGraphChangesForVis(G, G4)
       pubAreaLabelsPath.publish( pathToMarker(G4, xpath4, 0, [1,0,0,1], 0.9) )
       pubAreaLabelsGraph.publish( graphToMarkerArray(G4changes, 0.2) )
+
+    # trade-off curve
+    if old_rosgraph != rosgraph or old_areaCosts != areaCosts or old_pstart != pstart or old_pgoal != pgoal:
+      # compute
+      rospy.loginfo("Computing explanation trade-offs based on polyLabelsInPath...")
+      xto_vec, Gto_vec, distto_vec, l1to_vec = optPolyLabelsInPathTradeoff4(G, areaCosts, gpath_desired, verbose=True)
+      xpathto_vec = []
+      for Gto in Gto_vec:
+        xpathto = nx.shortest_path(Gto, source=pstart, target=pgoal, weight="weight")
+        xpathto_vec.append(xpathto)
+    # pick index to visualize... TODO: dynamic reconfigure
+    idx = np.where(distto_vec <= min(distto_vec))[0][0]
+    Gto = Gto_vec[idx]
+    xpathto = xpathto_vec[idx]
+    # visualize
+    if pubTradeoffPolyLabelsPath.get_num_connections() > 0 or pubTradeoffPolyLabelsGraph.get_num_connections() > 0:
+      Gtochanges = getGraphChangesForVis(G, Gto)
+      pubTradeoffPolyLabelsPath.publish( pathToMarker(Gto, xpathto, 0, [1,0,0,1], 0.9) )
+      pubTradeoffPolyLabelsGraph.publish( graphToMarkerArray(Gtochanges, 0.2) )
 
     # Running bencharks
     if False:

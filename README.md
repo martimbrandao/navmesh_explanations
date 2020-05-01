@@ -40,8 +40,9 @@ TODO:
 - [x] report vars_changed_perc, num_iter
 - [x] LASSO-style complexity-error trade-off plot
 - [x] better desired-path computation (e.g. apply lowest-cost areatype to all edges, compute shortest-path)
-- [ ] interface for providing desired waypoint (e.g. rviz with interactive marker)
+- [ ] dynamic reconfigure slider to pick desired tradoff point (this should just be picking one of the stored points and avoid recomputing)
 - [ ] recast2pddl (for evaluating tathagata's XAIP)
+- [ ] interface for providing desired waypoint (e.g. rviz with interactive marker)
 - [ ] failure explanations
 
 MAYBE:
