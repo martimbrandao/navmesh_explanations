@@ -42,13 +42,14 @@ TODO:
 - [x] better desired-path computation (e.g. apply lowest-cost areatype to all edges, compute shortest-path)
 - [x] dynamic reconfigure slider to pick desired tradoff point (this should just be picking one of the stored points and avoid recomputing)
 - [ ] recast2pddl (for evaluating tathagata's XAIP)
+- [ ] failure explanations (e.g. between two unconnected regions)
+- [ ] explanations for waypoints (e.g. why didn't you use waypoints x1, x2)
 - [ ] interface for providing desired waypoint (e.g. rviz with interactive marker)
-- [ ] failure explanations
+- [ ] material for user studies
 
 MAYBE:
 - [ ] new objective function distance-from-shortest-to-desired-path?
 - [ ] better alternative to l1norm? elastic net (see wikipedia regression)? Boyd's alternative to L1?
-- [ ] dynamic reconfigure slide bar for "LASSO" regularizer (explanation fidelity)
 - [ ] compare k-shortest paths to: 1) random walks (RRTs); 2) diverse short paths (Voss 2015);
 - [ ] gaitmesh subdivide triangles
 - [ ] some more environments, e.g. KCL
