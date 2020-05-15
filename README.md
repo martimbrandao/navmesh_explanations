@@ -44,7 +44,7 @@ TODO:
 - [ ] recast2pddl (for evaluating tathagata's XAIP)
 - [ ] failure explanations (e.g. between two unconnected regions)
 - [ ] explanations for waypoints (e.g. why didn't you use waypoints x1, x2)
-- [ ] interface for providing desired waypoint (e.g. rviz with interactive marker)
+- [x] interface for providing desired waypoint (e.g. rviz with interactive marker)
 - [ ] material for user studies
 
 MAYBE:

@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+
+<launch>
+
+  <!-- Rviz -->
+  <node type="rviz" name="recast_explanations_interactive" pkg="rviz" args="-d $(find recast_explanations_ros)/rviz/interactive.rviz" output="screen" />
+
+  <!-- interface node -->
+  <node pkg="recast_explanations_ros" type="interface_node" name="recast_explanations_interface" output="screen" />
+
+  <!-- explanations node -->
+  <node pkg="recast_explanations_ros" type="test_recast_explanations.py" name="recast_explanations" output="screen" />
+
+</launch>

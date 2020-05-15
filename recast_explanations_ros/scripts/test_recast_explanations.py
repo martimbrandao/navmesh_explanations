@@ -89,6 +89,13 @@ def distanceMatrix(graph):
   return D
 
 
+def getCost(graph, path):
+  cost = 0
+  for i in range(len(path)-1):
+    cost += graph[path[i]][path[i+1]]["weight"]
+  return cost
+
+
 def newPoint(point, height):
   newpoint = Point()
   newpoint.x = point.x
@@ -1459,10 +1466,10 @@ def optPolyLabelsInPathTradeoff4(graph, areaCosts, desiredPath, verbose):
   curve_l1 = []
   curve_newgraph = []
   curve_newpolylabels = []
-  for l1 in np.linspace(1,81,21):
+  for l1 in np.linspace(1, tradeoff_maxL1, 21):
     if verbose:
       rospy.loginfo("Computing best explanation with L1 <= %f ...." % l1)
-    ok, x, G, it = computeExplanationISP(graph, desiredPath[0], desiredPath[-1], areaCosts, desiredPath, "polyLabelsInPathWithL1Target", "kdp-brandao", 5, 10, verbose=verbose, acceptable_dist=0.0, args=l1)
+    ok, x, G, it = computeExplanationISP(graph, desiredPath[0], desiredPath[-1], areaCosts, desiredPath, "polyLabelsInPathWithL1Target", "kdp-brandao", 2, 5, verbose=verbose, acceptable_dist=0.0, args=l1)
     # save
     curve_newgraph.append(G)
     curve_newpolylabels.append(x)
@@ -1849,6 +1856,7 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
 
 tradeoff_visualized_index = None
 tradeoff_maxL1 = None
+contrastive_waypoint = None
 
 def callback(config, level):
   global tradeoff_visualized_index, tradeoff_maxL1
@@ -1856,6 +1864,11 @@ def callback(config, level):
   tradeoff_visualized_index = config.tradeoff_visualized_index
   tradeoff_maxL1 = config.tradeoff_maxL1
   return config
+
+def callbackContrastiveWaypoint(data):
+  global contrastive_waypoint
+  rospy.loginfo("Received contrastive waypoint")
+  contrastive_waypoint = data
 
 
 ### visualization
@@ -1878,11 +1891,13 @@ if __name__ == "__main__":
   debug = False
 
   # ros init
-  rospy.init_node('test_recast_explanations')
+  rospy.init_node('recast_explanations')
 
   pubGraph = rospy.Publisher('graph', MarkerArray, queue_size=10)
   pubPath = rospy.Publisher('graph_path', Marker, queue_size=10)
   pubPathDesired = rospy.Publisher('graph_path_desired', Marker, queue_size=10)
+
+  rospy.Subscriber("/recast_explanations_interface/contrastive_position", Point, callbackContrastiveWaypoint)
 
   pubDiv1 = rospy.Publisher('graph_diversity1', MarkerArray, queue_size=10)
   pubDiv2 = rospy.Publisher('graph_diversity2', MarkerArray, queue_size=10)
@@ -1913,10 +1928,12 @@ if __name__ == "__main__":
   areaCosts = None
   pstart = None
   pgoal = None
+  pwaypoint = None
   old_rosgraph = None
   old_areaCosts = None
   old_pstart = None
   old_pgoal = None
+  old_pwaypoint = None
 
   # prepare plots
   show_tradeoff = True
@@ -1943,6 +1960,8 @@ if __name__ == "__main__":
       old_pstart = pstart
     if pgoal is not None:
       old_pgoal = pgoal
+    if pwaypoint is not None:
+      old_pwaypoint = pwaypoint
 
     # get area costs
     rospy.loginfo('Getting area costs...')
@@ -2011,16 +2030,33 @@ if __name__ == "__main__":
         totalcost += cost
       rospy.loginfo('total cost = ' + str(totalcost))
 
-    # desired path on graph
-    rospy.loginfo('Solving shortest-hop ("desired") path on our local graph...')
+    # desired path on graph (v1)
+    #rospy.loginfo('Solving shortest-hop ("desired") path on our local graph...')
     #gpath_desired = nx.shortest_path(G, source=pstart, target=pgoal)
+
+    # desired path on graph (v2)
+    rospy.loginfo('Computing desired path from waypoint...')
     Gdesired = G.copy()
     for edge in Gdesired.edges:
       area = 1
       Gdesired[edge[0]][edge[1]]["area"] = area
       Gdesired[edge[0]][edge[1]]["cost"] = areaCosts[area]
       Gdesired[edge[0]][edge[1]]["weight"] = areaCosts[area] * dist(Gdesired.nodes[edge[0]]["point"], Gdesired.nodes[edge[1]]["point"])
-    gpath_desired = nx.shortest_path(Gdesired, source=pstart, target=pgoal, weight="weight")
+    if contrastive_waypoint == None:
+      # shortest path on area1
+      gpath_desired = nx.shortest_path(Gdesired, source=pstart, target=pgoal, weight="weight")
+    else:
+      # get closest node
+      proj = getProj(contrastive_waypoint)
+      pwaypoint = getKey(proj.projected_polygon_center)
+      # shortest path on area1, through waypoint
+      gpath_desired = nx.shortest_path(Gdesired, source=pstart, target=pwaypoint, weight="weight")[:-1]
+      gpath_desired += nx.shortest_path(Gdesired, source=pwaypoint, target=pgoal, weight="weight")
+
+    # compare costs
+    cost_path = getCost(G, gpath)
+    cost_path_desired = getCost(G, gpath_desired)
+    rospy.loginfo('Cost of desired path is %f >= %f' % (cost_path_desired, cost_path))
 
     # visualize graph and paths
     if pubGraph.get_num_connections() > 0:
@@ -2111,7 +2147,7 @@ if __name__ == "__main__":
 
     # trade-off curve
     if show_tradeoff:
-      if old_rosgraph != rosgraph or old_areaCosts != areaCosts or old_pstart != pstart or old_pgoal != pgoal:
+      if old_rosgraph != rosgraph or old_areaCosts != areaCosts or old_pstart != pstart or old_pgoal != pgoal or old_pwaypoint != pwaypoint:
         # compute
         rospy.loginfo("Computing explanation trade-offs based on polyLabelsInPath...")
         to_x_vec, to_G_vec, to_dist_vec, to_l1_vec = optPolyLabelsInPathTradeoff4(G, areaCosts, gpath_desired, verbose=True)
