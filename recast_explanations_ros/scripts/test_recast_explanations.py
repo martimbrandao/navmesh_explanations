@@ -276,6 +276,290 @@ def getGraphChangesForVis(graph1, graph2):
 
 ### optimization
 
+def findShortestPathLP(graph, start, goal):
+  # variable: x_ij                                              # vector of indicator variables saying if edge ij is part of the path
+  # cost: sum_ij w_ij * x_ij
+  # constraints: sum_j x_ij - sum_j x_ji = 1 (for i = start)    # outcoming edges - incoming edges = 1
+  #              sum_j x_ij - sum_j x_ji =-1 (for i = goal)     # outcoming edges - incoming edges =-1
+  #              sum_j x_ij - sum_j x_ji = 0 (other i)          # outcoming edges - incoming edges = 0
+
+  edge2index = {}
+  edges = []
+  weights = []
+  for (i,j) in graph.edges:
+    edge2index[i,j] = len(edges)
+    edges.append([i,j])
+    weights.append(graph[i][j]["weight"])
+    edge2index[j,i] = len(edges)
+    edges.append([j,i])
+    weights.append(graph[j][i]["weight"])
+
+  A = []
+  b = []
+  for n in graph.nodes:
+    # sum_j x_ij - sum_j x_ji
+    line = [0]*len(edges)
+    for i,j in edge2index.keys():
+      if i == n:
+        line[edge2index[i,j]] += 1
+    for j,i in edge2index.keys():
+      if i == n:
+        line[edge2index[j,i]] -= 1
+    A.append(line)
+    # = 1/-1/0
+    if n == start:
+      b.append(1)
+    elif n == goal:
+      b.append(-1)
+    else:
+      b.append(0)
+  #for n in waypoints: # note: this would just add a "flying" edge with no connections to the shortest path...
+  #  # sum_j x_ij = 1
+  #  line = [0]*len(edges)
+  #  for i,j in edge2index.keys():
+  #    if i == n:
+  #      line[edge2index[i,j]] += 1
+  #  A.append(line)
+  #  b.append(1)
+  A = np.array(A)
+  b = np.array(b)
+
+  # solve with cvxpy
+  x = cp.Variable(len(edges))
+  cost = cp.sum(cp.multiply(x, weights))
+  prob = cp.Problem(cp.Minimize(cost), [x >= 0, x <= 1, A @ x == b])
+  value = prob.solve()
+  if value == float('inf'):
+    rospy.loginfo("... shortest path LP failed")
+    return []
+
+  # recover path
+  path = [start]
+  while path[-1] != goal:
+    for i in range(len(edges)):
+      if abs(x.value[i] - 1) < 1e-3 and edges[i][0] == path[-1]:
+        path.append(edges[i][1])
+        break
+  return path
+
+
+def optInvLP2(graph, desiredPath):
+  # Roland 2014 "Inverse multi-objective combinatorial optimization", eq. 5.10
+
+  # variables:
+  #   x_j:      indicator variable, whether edge j is part of the shortest path
+  #   A_ij:     node-arc incidence matrix (rows are nodes, columns are edges) = 1 if j leaves i, -1 if j enters i, 0 otherwise
+  #   b_i:      difference between entering and leaving edges = 1 if i start, -1 if i target, 0 otherwise
+  #   pi_i:     dual variable
+  #   lambda_j: dual variable
+
+  # problems:
+  #   SP:  min  c.x,
+  #        s.t. Ax=b, x>=0
+  #   ISP: min  |d-c|,
+  #        s.t. sum_i a_ij * pi_i = d_j,              for all j in desired path
+  #             sum_i a_ij * pi_i + lambda_j = d_j,   for all j not in desired path
+  #             lambda >= 0,                          for all j not in desired path.
+
+  verbose = False
+
+  # auxiliary variables
+  edge2index = {}
+  edges = []
+  weights = []
+  for (i,j) in graph.edges:
+    edge2index[i,j] = len(edges)
+    edges.append([i,j])
+    weights.append(graph[i][j]["weight"])
+    edge2index[j,i] = len(edges)
+    edges.append([j,i])
+    weights.append(graph[j][i]["weight"])
+  node2index = {}
+  nodes = []
+  for n in graph.nodes:
+    node2index[n] = len(nodes)
+    nodes.append(n)
+    if n == desiredPath[0]:
+      s = node2index[n]
+    if n == desiredPath[-1]:
+      t = node2index[n]
+  weights = np.array(weights)
+
+  # Ax = b
+  A = np.zeros([len(nodes), len(edges)])
+  b = np.zeros(len(nodes))
+  for i in range(len(nodes)):
+    for nei in graph.adj[nodes[i]]:
+      j = edge2index[nodes[i], nei]
+      A[i,j] = 1
+      j = edge2index[nei, nodes[i]]
+      A[i,j] =-1
+    if i == s:
+      b[i] = 1
+    if i == t:
+      b[i] =-1
+
+  # optimal x
+  path = nx.shortest_path(graph, source=desiredPath[0], target=desiredPath[-1], weight="weight")
+  xstar = np.zeros(len(edges))
+  for p in range(len(path)-1):
+    j = edge2index[path[p], path[p+1]]
+    xstar[j] = 1
+
+  # desired x
+  xzero = np.zeros(len(edges))
+  for p in range(len(desiredPath)-1):
+    j = edge2index[desiredPath[p], desiredPath[p+1]]
+    xzero[j] = 1
+
+  # inverse optimization problem
+  d_ = cp.Variable(len(edges))
+  pi_ = cp.Variable(len(nodes))
+  lambda_ = cp.Variable(len(edges))
+  cost = cp.norm1(d_ - weights)
+  constraints = []
+  for j in range(len(edges)):
+    if xzero[j] == 1:
+      constraints.append( cp.sum(cp.multiply(A[:,j], pi_)) == d_[j] )
+    else:
+      constraints.append( cp.sum(cp.multiply(A[:,j], pi_)) + lambda_[j] == d_[j] )
+  for j in range(len(edges)):
+    if xzero[j] == 0:
+      constraints.append( lambda_[j] >= 0 )
+  # undirected graph constraint (costs equal on both ways of each edge)
+  for edge in graph.edges:
+    ij = edge2index[edge[0],edge[1]]
+    ji = edge2index[edge[1],edge[0]]
+    constraints.append(d_[ij] == d_[ji])
+  # positive edge costs (necessary for dijkstra)
+  constraints.append(d_ >= 0)
+
+  # solve with cvxpy
+  prob = cp.Problem(cp.Minimize(cost), constraints)
+  value = prob.solve()
+  if value == float('inf'):
+    rospy.loginfo("  shortest path LP failed")
+    return []
+
+  # adjusted weights
+  new_weights = d_.value
+
+  # adjusted costs
+  new_costs = np.array([0]*len(weights))
+  for j in range(len(edges)):
+    edge = edges[j]
+    new_costs[j] = new_weights[j] / dist(graph.nodes[edge[0]]["point"], graph.nodes[edge[1]]["point"])
+
+  # new graph
+  newGraph = graph.copy()
+  for j in range(len(edges)):
+    edge = edges[j]
+    newGraph[edge[0]][edge[1]]["cost"] = new_costs[j]
+    newGraph[edge[0]][edge[1]]["weight"] = new_weights[j]
+    if not newGraph.nodes[edge[0]]["portal"]:
+      newGraph.nodes[edge[0]]["cost"] = new_costs[j]
+    if not newGraph.nodes[edge[1]]["portal"]:
+      newGraph.nodes[edge[1]]["cost"] = new_costs[j]
+
+  # sanity check
+  new_path = nx.shortest_path(newGraph, source=desiredPath[0], target=desiredPath[-1], weight="weight")
+  if getCost(graph, new_path) != getCost(graph, desiredPath):
+    rospy.logwarn("  new shortest path is not the desired one")
+  elif verbose:
+    rospy.loginfo("  inverse shortest path: success")
+
+  # changed entries
+  if verbose:
+    chent = np.sum(np.abs(new_weights - weights) > 1e-5)
+    rospy.loginfo("  changed entries: %d (%d edges)" % (chent, chent/2))
+
+  return new_weights, newGraph
+
+
+def optInvLP(graph, desiredPath):
+  # Zhang 1996 "Calculating some inverse linear programming problems", eqs. 2.1, 2.8
+  # Zhang 1996 "Calculating some inverse linear programming problems", eqs. 3.1, 3.5
+  # http://jsaezgallego.com/tutorial/2017/07/16/Inverse-opitmization.html
+
+  # TODO: need to add undirected graph constraint (costs equal on both ways of each edge)
+  # TODO: check correct
+
+  edge2index = {}
+  edges = []
+  weights = []
+  for (i,j) in graph.edges:
+    edge2index[i,j] = len(edges)
+    edges.append([i,j])
+    weights.append(graph[i][j]["weight"])
+    edge2index[j,i] = len(edges)
+    edges.append([j,i])
+    weights.append(graph[j][i]["weight"])
+  node2index = {}
+  nodes = []
+  for n in graph.nodes:
+    node2index[n] = len(nodes)
+    nodes.append(graph.nodes[n])
+
+  pi = cp.Variable(len(graph.nodes))
+  th = cp.Variable(len(edges))
+  al = cp.Variable(len(edges))
+
+  # J+ (in desired) and J- (not in desired)
+  Jplus = np.array([0]*len(edges))
+  for p in range(len(desiredPath)-1):
+    Jplus[edge2index[desiredPath[p],desiredPath[p+1]]] = 1
+  Jminus = 1 - Jplus
+
+  # sum_(ij not in desired) th_ij + sum_(ij in desired) al_ij
+  cost = cp.sum(cp.multiply(th, Jminus)) + cp.sum(cp.multiply(al, Jplus))
+
+  # th_ij, al_ij >= 0
+  constraints = [th >= 0, al >= 0]
+
+  # -pi_i + pi_j - th_ij <= c_ij  for i,j not in desired
+  # -pi_i + pi_j + al_ij >= c_ij  for i,j in desired
+  for ij in range(len(edges)):
+    i = node2index[edges[ij][0]]
+    j = node2index[edges[ij][1]]
+    if Jminus[ij] == 1:
+      constraints.append( -pi[i] + pi[j] - th[ij] <= weights[ij] )
+    elif Jplus[ij] == 1:
+      constraints.append( -pi[i] + pi[j] + al[ij] >= weights[ij] )
+
+  # solve with cvxpy
+  prob = cp.Problem(cp.Minimize(cost), constraints)
+  value = prob.solve()
+  if value == float('inf'):
+    rospy.loginfo("... inverse shortest path LP failed")
+    return []
+
+  # adjusted weights
+  new_weights = np.array([0]*len(weights))
+  for ij in range(len(edges)):
+    if Jminus[ij] == 1:
+      new_weights[ij] = weights[ij] + th.value[ij]
+    elif Jplus[ij] == 1:
+      new_weights[ij] = weights[ij] - al.value[ij]
+
+  # adjusted costs
+  new_costs = np.array([0]*len(weights))
+  for ij in range(len(edges)):
+    edge = edges[ij]
+    new_costs[ij] = new_weights[ij] / dist(graph.nodes[edge[0]]["point"], graph.nodes[edge[1]]["point"])
+
+  # new graph
+  newGraph = graph.copy()
+  for ij in range(len(edges)):
+    edge = edges[ij]
+    newGraph[edge[0]][edge[1]]["cost"] = new_costs[ij]
+    newGraph[edge[0]][edge[1]]["weight"] = new_weights[ij]
+    if not newGraph.nodes[edge[0]]["portal"]:
+      newGraph.nodes[edge[0]]["cost"] = new_costs[ij]
+    if not newGraph.nodes[edge[1]]["portal"]:
+      newGraph.nodes[edge[1]]["cost"] = new_costs[ij]
+  return new_weights, newGraph
+
+
 def optAreaCosts(graph, areaCosts, desiredPath, badPaths):
   # variable:     ac = areaCosts                                                  # vector of all area-label costs (float)
   # cost:         (ac-areaCosts)^2
@@ -1867,7 +2151,7 @@ def callback(config, level):
 
 def callbackContrastiveWaypoint(data):
   global contrastive_waypoint
-  rospy.loginfo("Received contrastive waypoint")
+  #rospy.loginfo("Received contrastive waypoint")
   contrastive_waypoint = data
 
 
@@ -1894,6 +2178,7 @@ if __name__ == "__main__":
   rospy.init_node('recast_explanations')
 
   pubGraph = rospy.Publisher('graph', MarkerArray, queue_size=10)
+  pubGraphCosts = rospy.Publisher('graph_costs', MarkerArray, queue_size=10)
   pubPath = rospy.Publisher('graph_path', Marker, queue_size=10)
   pubPathDesired = rospy.Publisher('graph_path_desired', Marker, queue_size=10)
 
@@ -1917,6 +2202,8 @@ if __name__ == "__main__":
   pubAreaLabelsGraph = rospy.Publisher('expl_area_labels_graph', MarkerArray, queue_size=10)
   pubTradeoffPolyLabelsPath =  rospy.Publisher('expl_tradeoff_poly_labels_path',  Marker,      queue_size=10)
   pubTradeoffPolyLabelsGraph = rospy.Publisher('expl_tradeoff_poly_labels_graph', MarkerArray, queue_size=10)
+  pubInvLpPath =       rospy.Publisher('expl_inv_lp_path',   Marker,      queue_size=10)
+  pubInvLpGraph =      rospy.Publisher('expl_inv_lp_graph',  MarkerArray, queue_size=10)
 
   srv = Server(ExplanationsConfig, callback)
 
@@ -1936,7 +2223,7 @@ if __name__ == "__main__":
   old_pwaypoint = None
 
   # prepare plots
-  show_tradeoff = True
+  show_tradeoff = False
   if show_tradeoff:
     plt.ion()
     fig = plt.figure()
@@ -2058,11 +2345,19 @@ if __name__ == "__main__":
     cost_path_desired = getCost(G, gpath_desired)
     rospy.loginfo('Cost of desired path is %f >= %f' % (cost_path_desired, cost_path))
 
+    # LP shortest path
+    if False:
+      rospy.loginfo('Computing shortest path from LP...')
+      lp_path = findShortestPathLP(G, pstart, pgoal)
+
     # visualize graph and paths
     if pubGraph.get_num_connections() > 0:
       rospy.loginfo('Visualizing our graph...')
       #pubGraph.publish( graphToMarkerArrayByArea(G, 0.2, list(range(-1,len(areaCosts)))) )
       pubGraph.publish( graphToMarkerArray(G, 0.2) )
+    if pubGraphCosts.get_num_connections() > 0:
+      rospy.loginfo('Visualizing our graph costs...')
+      pubGraphCosts.publish( graphToMarkerArrayByCost(G, 0.1) )
 
     if pubPath.get_num_connections() > 0:
       rospy.loginfo('Visualizing our shortest path...')
@@ -2116,6 +2411,14 @@ if __name__ == "__main__":
       # visualize
       pubPolyCostsPath.publish( pathToMarker(G2, xpath2, 0, [1,0,0,1], 0.9) )
       pubPolyCostsGraph.publish( graphToMarkerArrayByCost(G2, 0.2) )
+
+    if pubInvLpPath.get_num_connections() > 0 or pubInvLpGraph.get_num_connections() > 0:
+      rospy.loginfo('Computing explanation based on inverse LP...')
+      invlp_weights, invlp_graph = optInvLP2(G, gpath_desired)
+      invlp_xpath = nx.shortest_path(invlp_graph, source=pstart, target=pgoal, weight="weight")
+      # visualize
+      pubInvLpPath.publish( pathToMarker(invlp_graph, invlp_xpath, 0, [1,0,0,1], 0.9) )
+      pubInvLpGraph.publish( graphToMarkerArrayByCost(invlp_graph, 0.2) )
 
     if pubPolyLabelsPath.get_num_connections() > 0 or pubPolyLabelsGraph.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on polyLabelsInPath...")
