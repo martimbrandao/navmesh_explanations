@@ -343,6 +343,195 @@ def findShortestPathLP(graph, start, goal):
   return path
 
 
+def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes):
+
+  # variables:
+  #   x_j:      indicator variable, whether edge j is part of the shortest path
+  #   A_ij:     node-arc incidence matrix (rows are nodes, columns are edges) = 1 if j leaves i, -1 if j enters i, 0 otherwise
+  #   b_i:      difference between entering and leaving edges = 1 if i start, -1 if i target, 0 otherwise
+  #   pi_i:     dual variable
+  #   lambda_j: dual variable
+  #   c_j:      edge cost = dist_j * ac_0 * l_0 + dist_j * ac_1 * l_1 + ... = sum_(k in areas) dist_j * ac_k * l_ik
+  #   l_ik:     node area one-hot encoding
+
+  # problems:
+  #   SP:  min  c.x,
+  #        s.t. Ax=b, x>=0
+  #   ISP: min  |l-l'|,
+  #        s.t. sum_i a_ij * pi_i = sum_(k in areas) dist_j * ac_k * l_ik,              for all j in desired path
+  #             sum_i a_ij * pi_i + lambda_j = sum_(k in areas) dist_j * ac_k * l_ik,   for all j not in desired path
+  #             sum_k l_ik = 1                                                          for all i
+  #             lambda >= 0,                                                            for all j not in desired path.
+
+  verbose = True
+  cost_type = "weights"   # "weights" or "label_changes"
+
+  # auxiliary variables
+  edge2index = {}
+  edges = []
+  edge2varnodeindex = {}
+  varnodes = []
+  weights = []
+  for (i,j) in graph.edges:
+    edge2index[i,j] = len(edges)
+    edges.append([i,j])
+    edge2index[j,i] = len(edges)
+    edges.append([j,i])
+    if not graph.nodes[i]["portal"]:
+      edge2varnodeindex[i,j] = len(varnodes)
+      edge2varnodeindex[j,i] = len(varnodes)
+      varnodes.append(i)
+    if not graph.nodes[j]["portal"]:
+      edge2varnodeindex[i,j] = len(varnodes)
+      edge2varnodeindex[j,i] = len(varnodes)
+      varnodes.append(j)
+    weights.append(graph[i][j]["weight"])
+  node2index = {}
+  nodes = []
+  for n in graph.nodes:
+    node2index[n] = len(nodes)
+    nodes.append(n)
+    if n == desiredPath[0]:
+      s = node2index[n]
+    if n == desiredPath[-1]:
+      t = node2index[n]
+  weights = np.array(weights)
+
+  # l_original
+  l_original = np.zeros(len(varnodes) * len(allowedAreaTypes))
+  for (i,j) in graph.edges:
+    idx = edge2varnodeindex[i,j]
+    node = varnodes[idx]
+    for k in range(len(allowedAreaTypes)):
+      if allowedAreaTypes[k] == graph.nodes[node]["area"]:
+        l_original[len(allowedAreaTypes) * idx + k] = 1
+      else:
+        l_original[len(allowedAreaTypes) * idx + k] = 0
+
+  # Ax = b
+  A = np.zeros([len(nodes), len(edges)])
+  b = np.zeros(len(nodes))
+  for i in range(len(nodes)):
+    for nei in graph.adj[nodes[i]]:
+      j = edge2index[nodes[i], nei]
+      A[i,j] = 1
+      j = edge2index[nei, nodes[i]]
+      A[i,j] =-1
+    if i == s:
+      b[i] = 1
+    if i == t:
+      b[i] =-1
+
+  # optimal x
+  path = nx.shortest_path(graph, source=desiredPath[0], target=desiredPath[-1], weight="weight")
+  xstar = np.zeros(len(edges))
+  for p in range(len(path)-1):
+    j = edge2index[path[p], path[p+1]]
+    xstar[j] = 1
+
+  # desired x
+  xzero = np.zeros(len(edges))
+  for p in range(len(desiredPath)-1):
+    j = edge2index[desiredPath[p], desiredPath[p+1]]
+    xzero[j] = 1
+
+  # inverse optimization problem
+  l_ = cp.Variable(len(l_original), boolean=True)
+  pi_ = cp.Variable(len(nodes))
+  lambda_ = cp.Variable(len(edges))
+  # cost
+  if cost_type == "weights":
+    cost = 0
+    j = 0
+    for edge in graph.edges:
+      i = edge2varnodeindex[edge[0], edge[1]]
+      # edge's new cost d_j = sum_(k in areas) dist_j * ac_k * l_ik
+      d_j = 0
+      dist_j = dist(graph.nodes[edge[0]]["point"], graph.nodes[edge[1]]["point"])
+      for k in range(len(allowedAreaTypes)):
+        ac_k = areaCosts[allowedAreaTypes[k]]
+        d_j += dist_j * ac_k * l_[len(allowedAreaTypes) * i + k]
+      cost += cp.abs(d_j - weights[j])
+      j += 1
+  else:
+    cost = cp.norm1(l_ - l_original)
+  # constraints
+  constraints = []
+  for j in range(len(edges)):
+    edge = edges[j]
+    i = edge2varnodeindex[edge[0], edge[1]]
+    # edge's new cost d_j = sum_(k in areas) dist_j * ac_k * l_ik
+    d_j = 0
+    dist_j = dist(graph.nodes[edge[0]]["point"], graph.nodes[edge[1]]["point"])
+    for k in range(len(allowedAreaTypes)):
+      ac_k = areaCosts[allowedAreaTypes[k]]
+      d_j += dist_j * ac_k * l_[len(allowedAreaTypes) * i + k]
+    if xzero[j] == 1:
+      # sum_i a_ij * pi_i = d_j,              for all j in desired path
+      constraints.append( cp.sum(cp.multiply(A[:,j], pi_)) == d_j )
+    else:
+      # sum_i a_ij * pi_i + lambda_j = d_j,   for all j not in desired path
+      constraints.append( cp.sum(cp.multiply(A[:,j], pi_)) + lambda_[j] == d_j )
+  # sum_k l_ik = 1, for all i
+  for i in range(len(varnodes)):
+    idx = len(allowedAreaTypes) * i
+    constraints.append( cp.sum(l_[idx:idx+k]) == 1 )
+  # lambda >= 0, for all j not in desired path.
+  for j in range(len(edges)):
+    if xzero[j] == 0:
+      constraints.append( lambda_[j] >= 0 )
+
+  # solve with cvxpy
+  prob = cp.Problem(cp.Minimize(cost), constraints)
+  mosek_params = {"MSK_DPAR_MIO_MAX_TIME":-1, "MSK_DPAR_MIO_TOL_REL_GAP":0, "MSK_IPAR_MIO_CUT_CLIQUE":0, "MSK_IPAR_MIO_CUT_CMIR":0, "MSK_IPAR_MIO_CUT_GMI":0, "MSK_IPAR_MIO_CUT_SELECTION_LEVEL":0, "MSK_IPAR_MIO_FEASPUMP_LEVEL":1, "MSK_IPAR_MIO_VB_DETECTION_LEVEL":1}
+  value = prob.solve(solver=cp.MOSEK, mosek_params=mosek_params, verbose=verbose)
+  #value = prob.solve(solver=cp.GUROBI, verbose=verbose)
+  if value == float('inf'):
+    rospy.loginfo("  inverse shortest path MILP failed")
+    return []
+
+  # TODO: can solve every 90s, warm starting from previous solution, until optimality or time budget
+  #       this way can return multiple solutions of better and better cost
+
+  # new graph
+  newGraph = graph.copy()
+  changed = 0
+  for j in range(len(edges)):
+    edge = edges[j]
+    i = edge2varnodeindex[edge[0], edge[1]]
+    area = -1
+    for k in range(len(allowedAreaTypes)):
+      if l_.value[len(allowedAreaTypes) * i + k] > 0.5:
+        area = allowedAreaTypes[k]
+        break
+    if area != graph[edge[0]][edge[1]]["area"]:
+      changed += 1
+    newGraph[edge[0]][edge[1]]["area"] = area
+    newGraph[edge[0]][edge[1]]["cost"] = areaCosts[area]
+    newGraph[edge[0]][edge[1]]["weight"] = areaCosts[area] * dist(graph.nodes[edge[0]]["point"], graph.nodes[edge[1]]["point"])
+    if not newGraph.nodes[edge[0]]["portal"]:
+      newGraph.nodes[edge[0]]["area"] = area
+      newGraph.nodes[edge[0]]["cost"] = areaCosts[area]
+    if not newGraph.nodes[edge[1]]["portal"]:
+      newGraph.nodes[edge[1]]["area"] = area
+      newGraph.nodes[edge[1]]["cost"] = areaCosts[area]
+
+  # sanity check
+  new_path = nx.shortest_path(newGraph, source=desiredPath[0], target=desiredPath[-1], weight="weight")
+  if getCost(graph, new_path) != getCost(graph, desiredPath):
+    rospy.logwarn("  new shortest path is not the desired one")
+  elif verbose:
+    rospy.loginfo("  inverse shortest path: success")
+
+  # changed entries
+  if verbose:
+    rospy.loginfo("  changed labels: %d" % changed)
+
+  pdb.set_trace()
+
+  return l_.value, newGraph
+
+
 def optInvLP2(graph, desiredPath):
   # Roland 2014 "Inverse multi-objective combinatorial optimization", eq. 5.10
 
@@ -2349,6 +2538,9 @@ if __name__ == "__main__":
     if False:
       rospy.loginfo('Computing shortest path from LP...')
       lp_path = findShortestPathLP(G, pstart, pgoal)
+
+    # test
+    optInvMILP(G, gpath_desired, areaCosts, [1,2])
 
     # visualize graph and paths
     if pubGraph.get_num_connections() > 0:
