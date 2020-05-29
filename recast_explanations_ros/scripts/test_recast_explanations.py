@@ -364,7 +364,8 @@ def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes):
   #             lambda >= 0,                                                            for all j not in desired path.
 
   verbose = True
-  cost_type = "weights"   # "weights" or "label_changes"
+  cost_type = "label_changes"   # "weights" or "label_changes"
+  exact = True
 
   # auxiliary variables
   edge2index = {}
@@ -483,9 +484,10 @@ def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes):
 
   # solve with cvxpy
   prob = cp.Problem(cp.Minimize(cost), constraints)
-  mosek_params = {"MSK_DPAR_MIO_MAX_TIME":-1, "MSK_DPAR_MIO_TOL_REL_GAP":0, "MSK_IPAR_MIO_CUT_CLIQUE":0, "MSK_IPAR_MIO_CUT_CMIR":0, "MSK_IPAR_MIO_CUT_GMI":0, "MSK_IPAR_MIO_CUT_SELECTION_LEVEL":0, "MSK_IPAR_MIO_FEASPUMP_LEVEL":1, "MSK_IPAR_MIO_VB_DETECTION_LEVEL":1}
-  value = prob.solve(solver=cp.MOSEK, mosek_params=mosek_params, verbose=verbose)
-  #value = prob.solve(solver=cp.GUROBI, verbose=verbose)
+  if exact:
+    value = prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":-1, "MSK_DPAR_MIO_TOL_REL_GAP":0, "MSK_IPAR_MIO_CUT_CLIQUE":0, "MSK_IPAR_MIO_CUT_CMIR":0, "MSK_IPAR_MIO_CUT_GMI":0, "MSK_IPAR_MIO_CUT_SELECTION_LEVEL":0, "MSK_IPAR_MIO_FEASPUMP_LEVEL":1, "MSK_IPAR_MIO_VB_DETECTION_LEVEL":1}, verbose=verbose)
+  else:
+    value = prob.solve(solver=cp.GUROBI, verbose=verbose)
   if value == float('inf'):
     rospy.loginfo("  inverse shortest path MILP failed")
     return []
