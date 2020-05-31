@@ -343,7 +343,7 @@ def findShortestPathLP(graph, start, goal):
   return path
 
 
-def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes):
+def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes, exact=True, verbose=True):
 
   # variables:
   #   x_j:      indicator variable, whether edge j is part of the shortest path
@@ -363,9 +363,7 @@ def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes):
   #             sum_k l_ik = 1                                                          for all i
   #             lambda >= 0,                                                            for all j not in desired path.
 
-  verbose = True
   cost_type = "label_changes"   # "weights" or "label_changes"
-  exact = True
 
   # auxiliary variables
   edge2index = {}
@@ -379,13 +377,16 @@ def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes):
     edge2index[j,i] = len(edges)
     edges.append([j,i])
     if not graph.nodes[i]["portal"]:
-      edge2varnodeindex[i,j] = len(varnodes)
-      edge2varnodeindex[j,i] = len(varnodes)
-      varnodes.append(i)
-    if not graph.nodes[j]["portal"]:
-      edge2varnodeindex[i,j] = len(varnodes)
-      edge2varnodeindex[j,i] = len(varnodes)
-      varnodes.append(j)
+      vn = i
+    else:
+      vn = j
+    if vn in varnodes:
+      idx = varnodes.index(vn)
+    else:
+      idx = len(varnodes)
+      varnodes.append(vn)
+    edge2varnodeindex[i,j] = idx
+    edge2varnodeindex[j,i] = idx
     weights.append(graph[i][j]["weight"])
   node2index = {}
   nodes = []
@@ -436,6 +437,13 @@ def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes):
     j = edge2index[desiredPath[p], desiredPath[p+1]]
     xzero[j] = 1
 
+  # weights for L1norm (not-on-path-penalty)
+  w = np.array([1]*len(l_original))
+  for i in range(len(varnodes)):
+    if varnodes[i] not in desiredPath[1:-1]:
+      for k in range(len(allowedAreaTypes)):
+        w[len(allowedAreaTypes) * i + k] *= 10
+
   # inverse optimization problem
   l_ = cp.Variable(len(l_original), boolean=True)
   pi_ = cp.Variable(len(nodes))
@@ -455,7 +463,7 @@ def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes):
       cost += cp.abs(d_j - weights[j])
       j += 1
   else:
-    cost = cp.norm1(l_ - l_original)
+    cost = cp.norm1(cp.multiply(l_ - l_original, w))  # cost = cp.norm1(l_ - l_original)
   # constraints
   constraints = []
   for j in range(len(edges)):
@@ -476,7 +484,7 @@ def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes):
   # sum_k l_ik = 1, for all i
   for i in range(len(varnodes)):
     idx = len(allowedAreaTypes) * i
-    constraints.append( cp.sum(l_[idx:idx+k]) == 1 )
+    constraints.append( cp.sum(l_[idx:idx+len(allowedAreaTypes)]) == 1 )
   # lambda >= 0, for all j not in desired path.
   for j in range(len(edges)):
     if xzero[j] == 0:
@@ -503,7 +511,7 @@ def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes):
     i = edge2varnodeindex[edge[0], edge[1]]
     area = -1
     for k in range(len(allowedAreaTypes)):
-      if l_.value[len(allowedAreaTypes) * i + k] > 0.5:
+      if l_.value[len(allowedAreaTypes) * i + k] == 1:
         area = allowedAreaTypes[k]
         break
     if area != graph[edge[0]][edge[1]]["area"]:
@@ -529,12 +537,11 @@ def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes):
   if verbose:
     rospy.loginfo("  changed labels: %d" % changed)
 
-  pdb.set_trace()
-
+  #pdb.set_trace()
   return l_.value, newGraph
 
 
-def optInvLP2(graph, desiredPath):
+def optInvLP(graph, desiredPath):
   # Roland 2014 "Inverse multi-objective combinatorial optimization", eq. 5.10
 
   # variables:
@@ -636,7 +643,7 @@ def optInvLP2(graph, desiredPath):
   new_weights = d_.value
 
   # adjusted costs
-  new_costs = np.array([0]*len(weights))
+  new_costs = np.array([0.0]*len(weights))
   for j in range(len(edges)):
     edge = edges[j]
     new_costs[j] = new_weights[j] / dist(graph.nodes[edge[0]]["point"], graph.nodes[edge[1]]["point"])
@@ -667,7 +674,7 @@ def optInvLP2(graph, desiredPath):
   return new_weights, newGraph
 
 
-def optInvLP(graph, desiredPath):
+def optInvLPzhang(graph, desiredPath):
   # Zhang 1996 "Calculating some inverse linear programming problems", eqs. 2.1, 2.8
   # Zhang 1996 "Calculating some inverse linear programming problems", eqs. 3.1, 3.5
   # http://jsaezgallego.com/tutorial/2017/07/16/Inverse-opitmization.html
@@ -725,7 +732,7 @@ def optInvLP(graph, desiredPath):
     return []
 
   # adjusted weights
-  new_weights = np.array([0]*len(weights))
+  new_weights = np.array([0.0]*len(weights))
   for ij in range(len(edges)):
     if Jminus[ij] == 1:
       new_weights[ij] = weights[ij] + th.value[ij]
@@ -733,7 +740,7 @@ def optInvLP(graph, desiredPath):
       new_weights[ij] = weights[ij] - al.value[ij]
 
   # adjusted costs
-  new_costs = np.array([0]*len(weights))
+  new_costs = np.array([0.0]*len(weights))
   for ij in range(len(edges)):
     edge = edges[ij]
     new_costs[ij] = new_weights[ij] / dist(graph.nodes[edge[0]]["point"], graph.nodes[edge[1]]["point"])
@@ -761,7 +768,7 @@ def optAreaCosts(graph, areaCosts, desiredPath, badPaths):
   G = []
   h = []
   for path in badPaths:
-    line = [0]*len(areaCosts)
+    line = [0.0]*len(areaCosts)
     # sum_(j in B) dist_j * ac_j
     for i in range(len(desiredPath)-1):
       d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
@@ -822,7 +829,7 @@ def optPolyCosts(graph, desiredPath, badPaths):
   #               nc_i >= 0                                                       # for all i
 
   # define variable
-  nodeCosts = np.array([0] * len(graph.nodes))
+  nodeCosts = np.array([0.0]*len(graph.nodes))
   for node in graph.nodes:
     nodeCosts[ graph.nodes[node]["id"] ] = graph.nodes[node]["cost"]
 
@@ -830,7 +837,7 @@ def optPolyCosts(graph, desiredPath, badPaths):
   G = []
   h = []
   for path in badPaths:
-    line = [0]*len(nodeCosts)
+    line = [0.0]*len(nodeCosts)
     # sum_(j in B) dist_j * nc_j
     for i in range(len(desiredPath)-1):
       d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
@@ -970,7 +977,7 @@ def optPolyLabels(graph, areaCosts, desiredPath, badPaths):
   #               l_i + l_(i+1) = 1                                         # each node can have only one 1
 
   # define variable
-  nodeLabelsHotEnc = np.array([0] * len(graph.nodes)*2)
+  nodeLabelsHotEnc = np.array([0]*len(graph.nodes)*2)
   for node in graph.nodes:
     if graph.nodes[node]["area"] == -1:
       continue
@@ -986,7 +993,7 @@ def optPolyLabels(graph, areaCosts, desiredPath, badPaths):
   G = []
   h = []
   for path in badPaths:
-    line = [0]*len(nodeLabelsHotEnc)
+    line = [0.0]*len(nodeLabelsHotEnc)
     # sum_(i in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
     for i in range(len(desiredPath)-1):
       d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
@@ -1144,7 +1151,7 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
   G = []
   h = []
   for path in badPaths:
-    line = [0]*len(nodeLabelsHotEnc)
+    line = [0.0]*len(nodeLabelsHotEnc)
     # sum_(i in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
     for i in range(len(desiredPath)-1):
       d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
@@ -1216,7 +1223,7 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
             weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d1 + d2
   #weights = [10]*len(nodeLabelsHotEnc)
   for i in range(len(nodeList)):
-    if nodeList[i] not in desiredPath:
+    if nodeList[i] not in desiredPath[1:-1]:
       weights[2*i  ] *= 10
       weights[2*i+1] *= 10
 
@@ -1283,7 +1290,7 @@ def optPolyLabelsInPathTradeoff(graph, areaCosts, desiredPath, badPaths):
   G = []
   h = []
   for path in badPaths:
-    line = [0]*len(nodeLabelsHotEnc)
+    line = [0.0]*len(nodeLabelsHotEnc)
     # sum_(i in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
     for i in range(len(desiredPath)-1):
       d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
@@ -1355,7 +1362,7 @@ def optPolyLabelsInPathTradeoff(graph, areaCosts, desiredPath, badPaths):
             weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d1 + d2
   #weights = [10]*len(nodeLabelsHotEnc)
   for i in range(len(nodeList)):
-    if nodeList[i] not in desiredPath:
+    if nodeList[i] not in desiredPath[1:-1]:
       weights[2*i  ] *= 10
       weights[2*i+1] *= 10
 
@@ -1486,7 +1493,7 @@ def optPolyLabelsInPathTradeoff2(graph, areaCosts, desiredPath, badPaths):
   G = []
   h = []
   for path in badPaths:
-    line = [0]*len(nodeLabelsHotEnc)
+    line = [0.0]*len(nodeLabelsHotEnc)
     # sum_(i in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
     for i in range(len(desiredPath)-1):
       d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
@@ -1649,7 +1656,7 @@ def optPolyLabelsInPathTradeoff3(graph, areaCosts, desiredPath, badPaths):
   G = []
   h = []
   for path in badPaths:
-    line = [0]*len(nodeLabelsHotEnc)
+    line = [0.0]*len(nodeLabelsHotEnc)
     # sum_(i in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
     for i in range(len(desiredPath)-1):
       d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
@@ -1721,7 +1728,7 @@ def optPolyLabelsInPathTradeoff3(graph, areaCosts, desiredPath, badPaths):
             weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d1 + d2
   if False:
     for i in range(len(nodeList)):
-      if nodeList[i] not in desiredPath:
+      if nodeList[i] not in desiredPath[1:-1]:
         weights[2*i  ] *= 10
         weights[2*i+1] *= 10
 
@@ -1844,7 +1851,7 @@ def optPolyLabelsInPathWithL1Target(graph, areaCosts, desiredPath, badPaths, l1)
   G = []
   h = []
   for path in badPaths:
-    line = [0]*len(nodeLabelsHotEnc)
+    line = [0.0]*len(nodeLabelsHotEnc)
     # sum_(i in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
     for i in range(len(desiredPath)-1):
       d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
@@ -1916,7 +1923,7 @@ def optPolyLabelsInPathWithL1Target(graph, areaCosts, desiredPath, badPaths, l1)
             weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d1 + d2
   if False:
     for i in range(len(nodeList)):
-      if nodeList[i] not in desiredPath:
+      if nodeList[i] not in desiredPath[1:-1]:
         weights[2*i  ] *= 10
         weights[2*i+1] *= 10
 
@@ -1935,7 +1942,7 @@ def optPolyLabelsInPathWithL1Target(graph, areaCosts, desiredPath, badPaths, l1)
   return getPolyLabelsAndGraph(x, graph, nodeList, areaCosts)
 
 
-def optPolyLabelsInPathTradeoff4(graph, areaCosts, desiredPath, verbose):
+def optPolyLabelsInPathTradeoff4(graph, areaCosts, desiredPath, verbose=True, diversity_method="kdp-brandao", num_alternatives=2, max_iter=5):
   # trade-off curve
   curve_dist = []
   curve_l1 = []
@@ -1944,7 +1951,7 @@ def optPolyLabelsInPathTradeoff4(graph, areaCosts, desiredPath, verbose):
   for l1 in np.linspace(1, tradeoff_maxL1, 21):
     if verbose:
       rospy.loginfo("Computing best explanation with L1 <= %f ...." % l1)
-    ok, x, G, it = computeExplanationISP(graph, desiredPath[0], desiredPath[-1], areaCosts, desiredPath, "polyLabelsInPathWithL1Target", "kdp-brandao", 2, 5, verbose=verbose, acceptable_dist=0.0, args=l1)
+    ok, x, G, it = computeExplanationISP(graph, desiredPath[0], desiredPath[-1], areaCosts, desiredPath, "polyLabelsInPathWithL1Target", diversity_method, num_alternatives, max_iter, verbose, acceptable_dist=0.0, args=l1)
     # save
     curve_newgraph.append(G)
     curve_newpolylabels.append(x)
@@ -1969,7 +1976,7 @@ def optAreaLabels(graph, areaCosts, allowedAreaTypes, desiredPath, badPaths):
   G = []
   h = []
   for path in badPaths:
-    line = [0]*len(labelSwitchHotEnc)
+    line = [0.0]*len(labelSwitchHotEnc)
     # sum_(i in B) sum_(j) dist_i * ac_j * l_(oldlabel_i,j)
     for i in range(len(desiredPath)-1):
       d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
@@ -2274,14 +2281,70 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
   rospy.loginfo("--------------------------------------------------")
   rospy.loginfo("Benchmarking %s..." % problem_type)
 
+  ### inverse optimization methods
+  if problem_type == "invLP" or problem_type == "invMILP" or problem_type == "invMILPapprox":
+
+    # compute explanation
+    time1 = time.clock()
+    if problem_type == "invLP":
+      newweights, newgraph = optInvLP(graph, desired_path)
+    if problem_type == "invMILP":
+      newweights, newgraph = optInvMILP(graph, desired_path, area_costs, [1,2], exact=True, verbose=verbose)
+    if problem_type == "invMILPapprox":
+      newweights, newgraph = optInvMILP(graph, desired_path, area_costs, [1,2], exact=False, verbose=verbose)
+    time2 = time.clock()
+
+    # compute shortest path
+    path = nx.shortest_path(newgraph, source=start, target=goal, weight="weight")
+
+    # compute l1norm and number of changed variables
+    x1 = []
+    x2 = []
+    if problem_type == "invLP":
+      for edge in list(graph.edges):
+        x1.append(graph[edge[0]][edge[1]]["cost"])
+        x2.append(newgraph[edge[0]][edge[1]]["cost"])
+    if problem_type == "invMILP" or problem_type == "invMILPapprox":
+      for edge in list(graph.edges):
+        x1.append(graph[edge[0]][edge[1]]["area"])
+        x2.append(newgraph[edge[0]][edge[1]]["area"])
+    x1 = np.array(x1)
+    x2 = np.array(x2)
+    l1norm = np.linalg.norm(x2 - x1, 1)
+    changed = np.sum( np.abs(x2 - x1) > 0.01 )
+
+    # log results
+    result = {}
+    result["problem_type"] = problem_type
+    result["diversity_method"] = ""
+    result["num_alternatives"] = ""
+    result["max_iter"] = ""
+    result["num_iter"] = ""
+    result["graph"] = newgraph
+    result["l1_norm"] = l1norm
+    result["changed_vars"] = changed
+    result["changed_vars_per"] = 100 * changed / len(x2)
+    result["dist"] = pathDistance(desired_path, path)
+    result["time"] = time2 - time1
+    results = []
+    results.append(result)
+    rospy.loginfo("Results:\n" + str(tabulate(results, headers="keys")))
+    return results
+
+  ### goodpath-badpaths methods
   results = []
   for diversity_method in ["ksp", "kdp-brandao"]:
     for num_alternatives in [1, 2, 5, 10, 20]:
-      for max_iter in [10]:
+      for max_iter in [5,10]:
 
         # compute explanation
         time1 = time.clock()
-        ok, x, newgraph, num_iter = computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, diversity_method, num_alternatives, max_iter, verbose, acceptable_dist)
+        if problem_type == "polyLabelsInPathTradeoff4":
+          vx, vG, vdist, vl1 = optPolyLabelsInPathTradeoff4(graph, area_costs, desired_path, verbose, diversity_method, num_alternatives, max_iter)
+          newgraph = vG[ np.where(vdist <= min(vdist))[0][0] ]
+          num_iter = 1
+        else:
+          ok, x, newgraph, num_iter = computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, diversity_method, num_alternatives, max_iter, verbose, acceptable_dist)
         time2 = time.clock()
 
         # compute shortest path
@@ -2312,6 +2375,7 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
 
         # log results
         result = {}
+        result["problem_type"] = problem_type
         result["diversity_method"] = diversity_method
         result["num_alternatives"] = num_alternatives
         result["max_iter"] = max_iter
@@ -2325,7 +2389,7 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
         results.append(result)
 
   rospy.loginfo("Results:\n" + str(tabulate(results, headers="keys")))
-
+  return results
 
 ### callback
 
@@ -2387,14 +2451,16 @@ if __name__ == "__main__":
   pubPolyCostsGraph =  rospy.Publisher('expl_poly_costs_graph',  MarkerArray, queue_size=10)
   pubPolyLabelsPath =  rospy.Publisher('expl_poly_labels_path',  Marker,      queue_size=10)
   pubPolyLabelsGraph = rospy.Publisher('expl_poly_labels_graph', MarkerArray, queue_size=10)
-  pubPolyLabels4Path = rospy.Publisher('expl_poly_labels4_path',  Marker,      queue_size=10)
-  pubPolyLabels4Graph =rospy.Publisher('expl_poly_labels4_graph', MarkerArray, queue_size=10)
+  pubPolyLabels4Path = rospy.Publisher('expl_poly_labels4_path', Marker,      queue_size=10)
+  pubPolyLabels4Graph =rospy.Publisher('expl_poly_labels4_graph',MarkerArray, queue_size=10)
   pubAreaLabelsPath =  rospy.Publisher('expl_area_labels_path',  Marker,      queue_size=10)
   pubAreaLabelsGraph = rospy.Publisher('expl_area_labels_graph', MarkerArray, queue_size=10)
   pubTradeoffPolyLabelsPath =  rospy.Publisher('expl_tradeoff_poly_labels_path',  Marker,      queue_size=10)
   pubTradeoffPolyLabelsGraph = rospy.Publisher('expl_tradeoff_poly_labels_graph', MarkerArray, queue_size=10)
-  pubInvLpPath =       rospy.Publisher('expl_inv_lp_path',   Marker,      queue_size=10)
-  pubInvLpGraph =      rospy.Publisher('expl_inv_lp_graph',  MarkerArray, queue_size=10)
+  pubInvLpPath =       rospy.Publisher('expl_inv_lp_path',       Marker,      queue_size=10)
+  pubInvLpGraph =      rospy.Publisher('expl_inv_lp_graph',      MarkerArray, queue_size=10)
+  pubInvMiLpPath =     rospy.Publisher('expl_inv_milp_path',     Marker,      queue_size=10)
+  pubInvMiLpGraph =    rospy.Publisher('expl_inv_milp_graph',    MarkerArray, queue_size=10)
 
   srv = Server(ExplanationsConfig, callback)
 
@@ -2541,9 +2607,6 @@ if __name__ == "__main__":
       rospy.loginfo('Computing shortest path from LP...')
       lp_path = findShortestPathLP(G, pstart, pgoal)
 
-    # test
-    optInvMILP(G, gpath_desired, areaCosts, [1,2])
-
     # visualize graph and paths
     if pubGraph.get_num_connections() > 0:
       rospy.loginfo('Visualizing our graph...')
@@ -2608,11 +2671,19 @@ if __name__ == "__main__":
 
     if pubInvLpPath.get_num_connections() > 0 or pubInvLpGraph.get_num_connections() > 0:
       rospy.loginfo('Computing explanation based on inverse LP...')
-      invlp_weights, invlp_graph = optInvLP2(G, gpath_desired)
+      invlp_weights, invlp_graph = optInvLP(G, gpath_desired)
       invlp_xpath = nx.shortest_path(invlp_graph, source=pstart, target=pgoal, weight="weight")
       # visualize
       pubInvLpPath.publish( pathToMarker(invlp_graph, invlp_xpath, 0, [1,0,0,1], 0.9) )
       pubInvLpGraph.publish( graphToMarkerArrayByCost(invlp_graph, 0.2) )
+
+    if pubInvMiLpPath.get_num_connections() > 0 or pubInvMiLpGraph.get_num_connections() > 0:
+      rospy.loginfo('Computing explanation based on inverse MILP...')
+      invmilp_weights, invmilp_graph = optInvMILP(G, gpath_desired, areaCosts, [1,2])
+      invmilp_xpath = nx.shortest_path(invmilp_graph, source=pstart, target=pgoal, weight="weight")
+      # visualize
+      pubInvMiLpPath.publish( pathToMarker(invmilp_graph, invmilp_xpath, 0, [1,0,0,1], 0.9) )
+      pubInvMiLpGraph.publish( graphToMarkerArray(invmilp_graph, 0.2) )
 
     if pubPolyLabelsPath.get_num_connections() > 0 or pubPolyLabelsGraph.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on polyLabelsInPath...")
@@ -2699,4 +2770,19 @@ if __name__ == "__main__":
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", verbose=False, acceptable_dist=0.0)
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=0.0)
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabels", verbose=False, acceptable_dist=0.0)
+
+    if False:
+      rospy.loginfo("Running benchmark for polyCosts [goodbadpaths VS invopt]...")
+      results1 = benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts", verbose=False, acceptable_dist=0.0)
+      results1+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invLP", verbose=False, acceptable_dist=0.0)
+      rospy.loginfo("Running benchmark for polyLabels [goodbadpaths VS invopt]...")
+      results2 = benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=0.0)
+      results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPathTradeoff4", verbose=False, acceptable_dist=0.0)
+      results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invMILP", verbose=False, acceptable_dist=0.0)
+      results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invMILPapprox", verbose=False, acceptable_dist=0.0)
+
+      rospy.loginfo("Benchmark for polyCosts [goodbadpaths VS invopt]:")
+      rospy.loginfo("\n"+str(tabulate(results1, headers="keys")))
+      rospy.loginfo("Benchmark for polyLabels [goodbadpaths VS invopt]:")
+      rospy.loginfo("\n"+str(tabulate(results2, headers="keys")))
 
