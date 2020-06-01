@@ -18,6 +18,7 @@ from recast_ros.srv import RecastProjectSrv, RecastProjectSrvRequest
 from recast_ros.msg import RecastGraph, RecastGraphNode
 from itertools import islice, product
 from tabulate import tabulate
+from queue import PriorityQueue
 
 
 ### functions
@@ -272,6 +273,92 @@ def getGraphChangesForVis(graph1, graph2):
       changes += 1
   rospy.loginfo("edge area changes = %d" % changes)
   return gchanges
+
+
+### search
+
+def applyChangesToGraph(originalgraph, changes, areaCosts):
+  graph = originalgraph.copy()
+  for node in changes:
+    area = changes[node]
+    cost = areaCosts[area]
+    graph.nodes[node]["area"] = area
+    graph.nodes[node]["cost"] = cost
+    for nei in graph.adj[node]:
+      graph[node][nei]["area"] = area
+      graph[node][nei]["cost"] = cost
+      graph[node][nei]["weight"] = cost * dist(graph.nodes[node]["point"], graph.nodes[nei]["point"])
+  return graph
+
+
+def astarGetSuccessors(originalgraph, changes, pathToDecreaseCost, pathToIncreaseCost, areaCosts, allowedAreaTypes):
+  graph = applyChangesToGraph(originalgraph, changes, areaCosts)
+  costs = [areaCosts[area] for area in allowedAreaTypes]
+  mincost = min(costs)
+  maxcost = max(costs)
+  successors = []
+  for i in range(len(pathToDecreaseCost)-1):
+    edge = [pathToDecreaseCost[i], pathToDecreaseCost[i+1]]
+    cost = graph[edge[0]][edge[1]]["cost"]
+    node = edge[0] if graph.nodes[edge[1]]["portal"] else edge[1]
+    if node not in changes and cost > mincost:
+      for newarea in allowedAreaTypes:
+        newcost = areaCosts[newarea]
+        if newcost < cost:
+          newchanges = changes.copy()
+          newchanges[node] = newarea
+          changeCost = 1
+          successors.append([newchanges, changeCost])
+  for i in range(len(pathToIncreaseCost)-1):
+    edge = [pathToIncreaseCost[i], pathToIncreaseCost[i+1]]
+    cost = graph[edge[0]][edge[1]]["cost"]
+    node = edge[0] if graph.nodes[edge[1]]["portal"] else edge[1]
+    if node not in changes and cost < maxcost:
+      for newarea in allowedAreaTypes:
+        newcost = areaCosts[newarea]
+        if newcost > cost:
+          newchanges = changes.copy()
+          newchanges[node] = newarea
+          changeCost = 10  # not-on-path nodes 10 times less preferred (similar to optimization-based methods)
+          successors.append([newchanges, changeCost])
+  return successors
+
+
+def astarHeuristic(originalgraph, changes, desiredPath):
+  return 0
+
+
+def astarPolyLabels(graph, desiredPath, areaCosts, allowedAreaTypes, verbose):
+  # Chakraborti et al, "Plan Explanations as Model Reconciliation: Moving Beyond Explanation as Soliloquy", 2017
+  # https://github.com/TathagataChakraborti/mmp/
+  # note: using heuristic successors for speed, bypassing original implementation to speed up results
+  #       i.e. using nx.shortest_path instead of fast-downward + VAL
+  startState            = {}
+  fringe                = PriorityQueue()
+  closed                = set()
+  numberOfNodesExpanded = 0
+  numberOfNodesAdded    = 0
+  fringe.put((0, 0, [startState, 0]))
+  while not fringe.empty():
+    node = fringe.get()[2]
+    newgraph = applyChangesToGraph(graph, node[0], areaCosts)
+    newpath = nx.shortest_path(newgraph, source=desiredPath[0], target=desiredPath[-1], weight="weight")
+    if pathDistance(desiredPath, newpath) == 0:
+      return [], newgraph
+    if frozenset(node[0]) not in closed:
+      closed.add(frozenset(node[0]))
+      successor_list = astarGetSuccessors(graph, node[0], desiredPath, newpath, areaCosts, allowedAreaTypes)
+      numberOfNodesExpanded  += 1
+      if verbose:
+        rospy.loginfo("%d models expanded... current depth: %d" % (numberOfNodesExpanded, node[1]))
+      while successor_list:
+        candidate_node      = successor_list.pop()
+        numberOfNodesAdded += 1
+        new_node            = [candidate_node[0], node[1] + candidate_node[1]]
+        fringe.put((astarHeuristic(graph, candidate_node, desiredPath) + new_node[1], numberOfNodesAdded, new_node))
+  if verbose:
+    rospy.loginfo("astarPolyLabels failed to find solution")
+  return None
 
 
 ### optimization
@@ -2282,7 +2369,7 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
   rospy.loginfo("Benchmarking %s..." % problem_type)
 
   ### inverse optimization methods
-  if problem_type == "invLP" or problem_type == "invMILP" or problem_type == "invMILPapprox":
+  if problem_type in ["invLP", "invMILP", "invMILPapprox", "astarPolyLabels"]:
 
     # compute explanation
     time1 = time.clock()
@@ -2292,6 +2379,8 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
       newweights, newgraph = optInvMILP(graph, desired_path, area_costs, [1,2], exact=True, verbose=verbose)
     if problem_type == "invMILPapprox":
       newweights, newgraph = optInvMILP(graph, desired_path, area_costs, [1,2], exact=False, verbose=verbose)
+    if problem_type == "astarPolyLabels":
+      newweights, newgraph = astarPolyLabels(graph, desired_path, area_costs, [1,2], verbose=verbose)
     time2 = time.clock()
 
     # compute shortest path
@@ -2304,7 +2393,7 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
       for edge in list(graph.edges):
         x1.append(graph[edge[0]][edge[1]]["cost"])
         x2.append(newgraph[edge[0]][edge[1]]["cost"])
-    if problem_type == "invMILP" or problem_type == "invMILPapprox":
+    if problem_type in ["invMILP", "invMILPapprox", "astarPolyLabels"]:
       for edge in list(graph.edges):
         x1.append(graph[edge[0]][edge[1]]["area"])
         x2.append(newgraph[edge[0]][edge[1]]["area"])
@@ -2334,7 +2423,7 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
   ### goodpath-badpaths methods
   results = []
   for diversity_method in ["ksp", "kdp-brandao"]:
-    for num_alternatives in [1, 2, 5, 10, 20]:
+    for num_alternatives in [1, 2, 5, 10]:
       for max_iter in [5,10]:
 
         # compute explanation
@@ -2772,17 +2861,25 @@ if __name__ == "__main__":
       benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabels", verbose=False, acceptable_dist=0.0)
 
     if False:
-      rospy.loginfo("Running benchmark for polyCosts [goodbadpaths VS invopt]...")
+      rospy.loginfo("Running benchmark for polyLabels [astar VS invopt]...")
+      results2 = benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invMILP", verbose=False, acceptable_dist=0.0)
+      results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "astarPolyLabels", verbose=False, acceptable_dist=0.0)
+      rospy.loginfo("Benchmark for polyLabels [astar VS invopt]:")
+      rospy.loginfo("\n"+str(tabulate(results2, headers="keys")))
+
+    if False:
+      rospy.loginfo("Running benchmark for polyCosts...")
       results1 = benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts", verbose=False, acceptable_dist=0.0)
       results1+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invLP", verbose=False, acceptable_dist=0.0)
-      rospy.loginfo("Running benchmark for polyLabels [goodbadpaths VS invopt]...")
-      results2 = benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=0.0)
+      rospy.loginfo("Running benchmark for polyLabels...")
+      results2 = benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "astarPolyLabels", verbose=False, acceptable_dist=0.0)
+      results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", verbose=False, acceptable_dist=0.0)
+      results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=0.0)
       results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPathTradeoff4", verbose=False, acceptable_dist=0.0)
       results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invMILP", verbose=False, acceptable_dist=0.0)
       results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invMILPapprox", verbose=False, acceptable_dist=0.0)
-
-      rospy.loginfo("Benchmark for polyCosts [goodbadpaths VS invopt]:")
+      rospy.loginfo("Benchmark for polyCosts:")
       rospy.loginfo("\n"+str(tabulate(results1, headers="keys")))
-      rospy.loginfo("Benchmark for polyLabels [goodbadpaths VS invopt]:")
+      rospy.loginfo("Benchmark for polyLabels:")
       rospy.loginfo("\n"+str(tabulate(results2, headers="keys")))
 
