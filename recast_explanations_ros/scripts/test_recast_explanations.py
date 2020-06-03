@@ -2869,10 +2869,12 @@ if __name__ == "__main__":
 
     if False:
       rospy.loginfo("Running benchmark for polyCosts...")
-      results1 = benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts", verbose=False, acceptable_dist=0.0)
+      results1 = []
+      results1+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts", verbose=False, acceptable_dist=0.0)
       results1+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invLP", verbose=False, acceptable_dist=0.0)
       rospy.loginfo("Running benchmark for polyLabels...")
-      results2 = benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "astarPolyLabels", verbose=False, acceptable_dist=0.0)
+      results2 = []
+      results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "astarPolyLabels", verbose=False, acceptable_dist=0.0)
       results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", verbose=False, acceptable_dist=0.0)
       results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=0.0)
       results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPathTradeoff4", verbose=False, acceptable_dist=0.0)
