@@ -15,10 +15,22 @@ Panels:
         - /Marker6
         - /MarkerArray1
         - /Marker7
-        - /MarkerArray2
         - /Marker8
-        - /MarkerArray3
+        - /MarkerArray2
         - /Marker9
+        - /Marker10
+        - /MarkerArray3
+        - /Marker11
+        - /Marker12
+        - /MarkerArray4
+        - /Marker13
+        - /Marker14
+        - /MarkerArray5
+        - /Marker15
+        - /Marker16
+        - /MarkerArray6
+        - /Marker17
+        - /Marker18
       Splitter Ratio: 0.5009041428565979
     Tree Height: 791
   - Class: rviz/Selection
@@ -48,21 +60,21 @@ Visualization Manager:
   Class: ""
   Displays:
     - Class: rviz/Marker
-      Enabled: true
+      Enabled: false
       Marker Topic: /recast_node/recast_path_start
       Name: Marker
       Namespaces:
-        Agent Start Position: true
+        {}
       Queue Size: 100
-      Value: true
+      Value: false
     - Class: rviz/Marker
-      Enabled: true
+      Enabled: false
       Marker Topic: /recast_node/recast_path_goal
       Name: Marker
       Namespaces:
-        Agent Goal Position: true
+        {}
       Queue Size: 100
-      Value: true
+      Value: false
     - Class: rviz/InteractiveMarkers
       Enable Transparency: true
       Enabled: true
@@ -74,26 +86,26 @@ Visualization Manager:
       Value: true
     - Class: rviz/Marker
       Enabled: true
-      Marker Topic: /recast_node/recast_path_start
+      Marker Topic: /recast_node/filtered_navigation_mesh_lines
       Name: Marker
       Namespaces:
-        Agent Start Position: true
+        Filtered NavMesh  Lines: true
       Queue Size: 100
       Value: true
     - Class: rviz/Marker
-      Enabled: true
-      Marker Topic: /recast_node/recast_path_goal
-      Name: Marker
-      Namespaces:
-        Agent Goal Position: true
-      Queue Size: 100
-      Value: true
-    - Class: rviz/Marker
-      Enabled: true
+      Enabled: false
       Marker Topic: /recast_node/recast_path_lines
       Name: Marker
       Namespaces:
-        Path Lines: true
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /graph_path
+      Name: Marker
+      Namespaces:
+        "": true
       Queue Size: 100
       Value: true
     - Class: rviz/Marker
@@ -106,8 +118,40 @@ Visualization Manager:
       Value: true
     - Class: rviz/MarkerArray
       Enabled: false
+      Marker Topic: /expl_area_labels_graph
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: false
+      Marker Topic: /expl_area_labels_navmesh
+      Name: Marker
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: false
+      Marker Topic: /expl_area_labels_path
+      Name: Marker
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/MarkerArray
+      Enabled: false
       Marker Topic: /expl_poly_labels_graph
       Name: MarkerArray
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: false
+      Marker Topic: /expl_poly_labels_navmesh
+      Name: Marker
       Namespaces:
         {}
       Queue Size: 100
@@ -130,6 +174,14 @@ Visualization Manager:
       Value: false
     - Class: rviz/Marker
       Enabled: false
+      Marker Topic: /expl_poly_labels4_navmesh
+      Name: Marker
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: false
       Marker Topic: /expl_poly_labels4_path
       Name: Marker
       Namespaces:
@@ -146,7 +198,63 @@ Visualization Manager:
       Value: false
     - Class: rviz/Marker
       Enabled: false
+      Marker Topic: /expl_tradeoff_poly_labels_navmesh
+      Name: Marker
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: false
       Marker Topic: /expl_tradeoff_poly_labels_path
+      Name: Marker
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/MarkerArray
+      Enabled: false
+      Marker Topic: /expl_inv_milp_graph
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: false
+      Marker Topic: /expl_inv_milp_navmesh
+      Name: Marker
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: false
+      Marker Topic: /expl_inv_milp_path
+      Name: Marker
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/MarkerArray
+      Enabled: false
+      Marker Topic: /expl_astar_poly_labels_graph
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: false
+      Marker Topic: /expl_astar_poly_labels_navmesh
+      Name: Marker
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: false
+      Marker Topic: /expl_astar_poly_labels_path
       Name: Marker
       Namespaces:
         {}
@@ -154,7 +262,7 @@ Visualization Manager:
       Value: false
   Enabled: true
   Global Options:
-    Background Color: 85; 87; 83
+    Background Color: 255; 255; 255
     Default Light: true
     Fixed Frame: map
     Frame Rate: 30
@@ -180,25 +288,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/ThirdPersonFollower
-      Distance: 33.140438079833984
+      Distance: 27.49099349975586
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 63.12916564941406
-        Y: 44.39363098144531
-        Z: 1.8452246877131984e-6
+        X: 78.63420867919922
+        Y: 42.39253616333008
+        Z: 7.567270586150698e-6
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.8247969150543213
+      Pitch: 0.4897971749305725
       Target Frame: <Fixed Frame>
       Value: ThirdPersonFollower (rviz)
-      Yaw: 4.218522071838379
+      Yaw: 5.068511009216309
     Saved: ~
 Window Geometry:
   Displays:
@@ -206,7 +314,7 @@ Window Geometry:
   Height: 1088
   Hide Left Dock: false
   Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd0000000400000000000001d8000003a2fc0200000008fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000003d000003a2000000c900fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261000000010000010f000003a2fc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073010000003d000003a2000000a400fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000007bd0000003efc0100000002fb0000000800540069006d00650100000000000007bd000002eb00fffffffb0000000800540069006d00650100000000000004500000000000000000000004ca000003a200000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd0000000400000000000001cc000003a2fc0200000008fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000003d000003a2000000c900fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261000000010000010f000003a2fc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073010000003d000003a2000000a400fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000007bd0000003efc0100000002fb0000000800540069006d00650100000000000007bd000002eb00fffffffb0000000800540069006d00650100000000000004500000000000000000000004d6000003a200000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Time:

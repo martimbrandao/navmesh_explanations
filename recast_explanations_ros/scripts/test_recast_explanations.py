@@ -14,6 +14,7 @@ from dynamic_reconfigure.server import Server
 from recast_explanations_ros.cfg import ExplanationsConfig
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import ColorRGBA
 from recast_ros.srv import RecastProjectSrv, RecastProjectSrvRequest
 from recast_ros.msg import RecastGraph, RecastGraphNode
 from itertools import islice, product
@@ -49,6 +50,8 @@ def addNode(rosnode, areaCosts, nodeDict):
   data["point"] = rosnode.point
   data["area"] = rosnode.area_type.data
   data["cost"] = areaCosts[rosnode.area_type.data]
+  data["idx_tri"] = rosnode.idx_triangles.data
+  data["num_tri"] = rosnode.num_triangles.data
   data["portal"] = False
   #if key in nodeDict and nodeDict[key] != data:
   #  return key, nodeDict[key]
@@ -116,10 +119,11 @@ def newMarker(id, type, scale, color):
     marker.scale.y = scale
     marker.scale.z = scale
   marker.type = type
-  marker.color.r = color[0]
-  marker.color.g = color[1]
-  marker.color.b = color[2]
-  marker.color.a = color[3]
+  if color != None and len(color) == 4:
+    marker.color.r = color[0]
+    marker.color.g = color[1]
+    marker.color.b = color[2]
+    marker.color.a = color[3]
   marker.pose.orientation.w = 1
   return marker
 
@@ -141,6 +145,24 @@ def pathsToMarkerArray(graph, paths, height):
     m = pathToMarker(graph, paths[i], i, color, height)
     markers.markers.append(m)
   return markers
+
+
+def graphToNavmesh(graph, navmesh, area2color):
+  newnavmesh = newMarker(navmesh.id, navmesh.type, 1, None)
+  for node in graph.nodes:
+    if not graph.nodes[node]["portal"]:
+      idx = graph.nodes[node]["idx_tri"]
+      num = graph.nodes[node]["num_tri"]
+      color = area2color[graph.nodes[node]["area"]]
+      for i in range(idx, idx+num*3):
+        roscolor = ColorRGBA()
+        roscolor.r = color[0]
+        roscolor.g = color[1]
+        roscolor.b = color[2]
+        roscolor.a = color[3]
+        newnavmesh.points.append(navmesh.points[i])
+        newnavmesh.colors.append(roscolor)
+  return newnavmesh
 
 
 def graphToMarkerArray(graph, height):
@@ -2538,18 +2560,32 @@ if __name__ == "__main__":
   pubAreaCostsGraph =  rospy.Publisher('expl_area_costs_graph',  MarkerArray, queue_size=10)
   pubPolyCostsPath =   rospy.Publisher('expl_poly_costs_path',   Marker,      queue_size=10)
   pubPolyCostsGraph =  rospy.Publisher('expl_poly_costs_graph',  MarkerArray, queue_size=10)
-  pubPolyLabelsPath =  rospy.Publisher('expl_poly_labels_path',  Marker,      queue_size=10)
-  pubPolyLabelsGraph = rospy.Publisher('expl_poly_labels_graph', MarkerArray, queue_size=10)
-  pubPolyLabels4Path = rospy.Publisher('expl_poly_labels4_path', Marker,      queue_size=10)
-  pubPolyLabels4Graph =rospy.Publisher('expl_poly_labels4_graph',MarkerArray, queue_size=10)
-  pubAreaLabelsPath =  rospy.Publisher('expl_area_labels_path',  Marker,      queue_size=10)
-  pubAreaLabelsGraph = rospy.Publisher('expl_area_labels_graph', MarkerArray, queue_size=10)
-  pubTradeoffPolyLabelsPath =  rospy.Publisher('expl_tradeoff_poly_labels_path',  Marker,      queue_size=10)
-  pubTradeoffPolyLabelsGraph = rospy.Publisher('expl_tradeoff_poly_labels_graph', MarkerArray, queue_size=10)
   pubInvLpPath =       rospy.Publisher('expl_inv_lp_path',       Marker,      queue_size=10)
   pubInvLpGraph =      rospy.Publisher('expl_inv_lp_graph',      MarkerArray, queue_size=10)
-  pubInvMiLpPath =     rospy.Publisher('expl_inv_milp_path',     Marker,      queue_size=10)
-  pubInvMiLpGraph =    rospy.Publisher('expl_inv_milp_graph',    MarkerArray, queue_size=10)
+
+  pubPolyLabelsPath     = rospy.Publisher('expl_poly_labels_path',    Marker,      queue_size=10)
+  pubPolyLabelsGraph    = rospy.Publisher('expl_poly_labels_graph',   MarkerArray, queue_size=10)
+  pubPolyLabelsNavmesh  = rospy.Publisher('expl_poly_labels_navmesh', Marker,      queue_size=10)
+
+  pubPolyLabels4Path    = rospy.Publisher('expl_poly_labels4_path',    Marker,      queue_size=10)
+  pubPolyLabels4Graph   = rospy.Publisher('expl_poly_labels4_graph',   MarkerArray, queue_size=10)
+  pubPolyLabels4Navmesh = rospy.Publisher('expl_poly_labels4_navmesh', Marker,      queue_size=10)
+
+  pubAreaLabelsPath     = rospy.Publisher('expl_area_labels_path',    Marker,      queue_size=10)
+  pubAreaLabelsGraph    = rospy.Publisher('expl_area_labels_graph',   MarkerArray, queue_size=10)
+  pubAreaLabelsNavmesh  = rospy.Publisher('expl_area_labels_navmesh', Marker,      queue_size=10)
+
+  pubTradeoffPolyLabelsPath    = rospy.Publisher('expl_tradeoff_poly_labels_path',    Marker,      queue_size=10)
+  pubTradeoffPolyLabelsGraph   = rospy.Publisher('expl_tradeoff_poly_labels_graph',   MarkerArray, queue_size=10)
+  pubTradeoffPolyLabelsNavmesh = rospy.Publisher('expl_tradeoff_poly_labels_navmesh', Marker,      queue_size=10)
+
+  pubInvMiLpPath    = rospy.Publisher('expl_inv_milp_path',    Marker,      queue_size=10)
+  pubInvMiLpGraph   = rospy.Publisher('expl_inv_milp_graph',   MarkerArray, queue_size=10)
+  pubInvMiLpNavmesh = rospy.Publisher('expl_inv_milp_navmesh', Marker,      queue_size=10)
+
+  pubAstarPolyLabelsPath    = rospy.Publisher('expl_astar_poly_labels_path',    Marker,      queue_size=10)
+  pubAstarPolyLabelsGraph   = rospy.Publisher('expl_astar_poly_labels_graph',   MarkerArray, queue_size=10)
+  pubAstarPolyLabelsNavmesh = rospy.Publisher('expl_astar_poly_labels_navmesh', Marker,      queue_size=10)
 
   srv = Server(ExplanationsConfig, callback)
 
@@ -2611,6 +2647,26 @@ if __name__ == "__main__":
       rospy.loginfo('nodes = ' + str(len(rosgraph.nodes)) + ' portals = ' + str(len(rosgraph.portals)))
 
     # networkx graph
+    #Gdirect = nx.Graph()
+    #G = nx.Graph()
+    #N = {}
+    #for i in range(0, len(rosgraph.nodes)):
+    #  # add node
+    #  k1, data1 = addNode(rosgraph.nodes[i], areaCosts, N)
+    #  cost1 = data1["cost"] * dist(data1["point"], datam["point"])
+    #  for idx in rosgraph.nodes[i].portals:
+    #    # add portal
+    #    km, datam = addPortal(rosgraph.portals[idx], N)
+    #    cost2 = data2["cost"] * dist(datam["point"], data2["point"])
+    #    # add edge
+    #    G.add_edge(k1, km, weight=cost1, area=data1["area"], cost=data1["cost"])
+    #    # add data
+    #    copyDict(datam, G.nodes[km])
+    #  # add data
+    #  copyDict(data1, G.nodes[k1])
+    #rospy.loginfo('Finished.')
+
+    # networkx graph
     Gdirect = nx.Graph()
     G = nx.Graph()
     N = {}
@@ -2634,6 +2690,31 @@ if __name__ == "__main__":
       copyDict(data1, G.nodes[k1])
       copyDict(data2, G.nodes[k2])
     rospy.loginfo('Finished.')
+
+    # get navmesh
+    rospy.loginfo('Getting navmesh...')
+    navmesh = rospy.wait_for_message('/recast_node/navigation_mesh', Marker)
+    # find all colors
+    navmesh_colors = list(set([(c.r,c.g,c.b,c.a) for c in navmesh.colors]))
+    navmesh_areas = [0] * len(navmesh_colors)
+    # infer area type of each color
+    for c in range(len(navmesh_colors)):
+      for i in range(len(navmesh.colors)):
+        color = navmesh.colors[i]
+        if (color.r,color.g,color.b,color.a) == navmesh_colors[c]:
+          pt0 = navmesh.points[i]
+          pt1 = navmesh.points[i+1]
+          pt2 = navmesh.points[i+2]
+          pt = Point()
+          pt.x = (pt0.x + pt1.x + pt2.x)/3
+          pt.y = (pt0.y + pt1.y + pt2.y)/3
+          pt.z = (pt0.z + pt1.z + pt2.z)/3
+          proj = getProj(pt)
+          navmesh_areas[c] = proj.area_type.data
+          break
+    area2color = {}
+    for i in range(len(navmesh_areas)):
+      area2color[navmesh_areas[i]] = navmesh_colors[i]
 
     # get path
     rospy.loginfo('Getting path...')
@@ -2773,17 +2854,19 @@ if __name__ == "__main__":
       # visualize
       pubInvMiLpPath.publish( pathToMarker(invmilp_graph, invmilp_xpath, 0, [1,0,0,1], 0.9) )
       pubInvMiLpGraph.publish( graphToMarkerArray(invmilp_graph, 0.2) )
+      pubInvMiLpNavmesh.publish( graphToNavmesh(invmilp_graph, navmesh, area2color) )
 
-    if pubPolyLabelsPath.get_num_connections() > 0 or pubPolyLabelsGraph.get_num_connections() > 0:
+    if pubPolyLabelsPath.get_num_connections() > 0 or pubPolyLabelsGraph.get_num_connections() > 0 or pubPolyLabelsNavmesh.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on polyLabelsInPath...")
       ok3, x3, G3, it3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", "kdp-brandao", 2, 10, verbose=True, acceptable_dist=1.0)
       xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
       # visualize
       G3changes = getGraphChangesForVis(G, G3)
       pubPolyLabelsPath.publish( pathToMarker(G3, xpath3, 0, [1,0,0,1], 0.9) )
-      pubPolyLabelsGraph.publish( graphToMarkerArray(G3changes, 0.2) )
+      pubPolyLabelsGraph.publish( graphToMarkerArray(G3, 0.2) )
+      pubPolyLabelsNavmesh.publish( graphToNavmesh(G3, navmesh, area2color) )
 
-    if pubPolyLabels4Path.get_num_connections() > 0 or pubPolyLabels4Graph.get_num_connections() > 0:
+    if pubPolyLabels4Path.get_num_connections() > 0 or pubPolyLabels4Graph.get_num_connections() > 0 or pubPolyLabels4Navmesh.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on polyLabelsInPathTradeoff4...")
       xto_vec, Gto_vec, distto_vec, l1to_vec = optPolyLabelsInPathTradeoff4(G, areaCosts, gpath_desired, verbose=False)
       G3 = Gto_vec[ np.where(distto_vec <= min(distto_vec))[0][0] ]
@@ -2792,8 +2875,9 @@ if __name__ == "__main__":
       G3changes = getGraphChangesForVis(G, G3)
       pubPolyLabels4Path.publish( pathToMarker(G3, xpath3, 0, [1,0,0,1], 0.9) )
       pubPolyLabels4Graph.publish( graphToMarkerArray(G3changes, 0.2) )
+      pubPolyLabels4Navmesh.publish( graphToNavmesh(G3, navmesh, area2color) )
 
-    if pubAreaLabelsPath.get_num_connections() > 0 or pubAreaLabelsGraph.get_num_connections() > 0:
+    if pubAreaLabelsPath.get_num_connections() > 0 or pubAreaLabelsGraph.get_num_connections() > 0 or pubAreaLabelsNavmesh.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on areaLabelsEnum...")
       ok4, x4, G4, it4 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", "kdp-brandao", 2, 10, verbose=False, acceptable_dist=3.0)
       xpath4 = nx.shortest_path(G4, source=pstart, target=pgoal, weight="weight")
@@ -2801,6 +2885,17 @@ if __name__ == "__main__":
       G4changes = getGraphChangesForVis(G, G4)
       pubAreaLabelsPath.publish( pathToMarker(G4, xpath4, 0, [1,0,0,1], 0.9) )
       pubAreaLabelsGraph.publish( graphToMarkerArray(G4changes, 0.2) )
+      pubAreaLabelsNavmesh.publish( graphToNavmesh(G4, navmesh, area2color) )
+
+    if pubAstarPolyLabelsPath.get_num_connections() > 0 or pubAstarPolyLabelsGraph.get_num_connections() > 0 or pubAstarPolyLabelsNavmesh.get_num_connections() > 0:
+      rospy.loginfo("Computing explanation based on astarPolyLabels...")
+      x5, G5 = astarPolyLabels(G, gpath_desired, areaCosts, [1,2], verbose=True)
+      xpath5 = nx.shortest_path(G5, source=pstart, target=pgoal, weight="weight")
+      # visualize
+      G5changes = getGraphChangesForVis(G, G5)
+      pubAstarPolyLabelsPath.publish( pathToMarker(G5, xpath5, 0, [1,0,0,1], 0.9) )
+      pubAstarPolyLabelsGraph.publish( graphToMarkerArray(G5, 0.2) )
+      pubAstarPolyLabelsNavmesh.publish( graphToNavmesh(G5, navmesh, area2color) )
 
     # trade-off curve
     if show_tradeoff:
@@ -2829,12 +2924,13 @@ if __name__ == "__main__":
       #fig.canvas.flush_events()
       rospy.loginfo("Visualizing selected point...")
       # visualize
-      if pubTradeoffPolyLabelsPath.get_num_connections() > 0 or pubTradeoffPolyLabelsGraph.get_num_connections() > 0:
+      if pubTradeoffPolyLabelsPath.get_num_connections() > 0 or pubTradeoffPolyLabelsGraph.get_num_connections() > 0 or pubTradeoffPolyLabelsNavmesh.get_num_connections() > 0:
         to_path_marker_vec[idx].header.stamp = rospy.Time.now()
         for marker in to_graph_marker_vec[idx].markers:
           marker.header.stamp = rospy.Time.now()
         pubTradeoffPolyLabelsPath.publish( to_path_marker_vec[idx] )
         pubTradeoffPolyLabelsGraph.publish( to_graph_marker_vec[idx] )
+        pubTradeoffPolyLabelsNavmesh.publish( graphToNavmesh(to_graph_marker_vec[idx], navmesh, area2color) )
 
     # Running bencharks
     if False:
