@@ -454,6 +454,156 @@ def findShortestPathLP(graph, start, goal):
   return path
 
 
+def optInvCOT(graph, desiredPath, areaCosts, allowedAreaTypes, exact=True, verbose=True):
+
+  # variables:
+  #   x_j:      indicator variable, whether edge j is part of the shortest path
+  #   A_ij:     node-arc incidence matrix (rows are nodes, columns are edges) = 1 if j leaves i, -1 if j enters i, 0 otherwise
+  #   b_i:      difference between entering and leaving edges = 1 if i start, -1 if i target, 0 otherwise
+  #   pi_i:     dual variable
+  #   lambda_j: dual variable
+  #   c_j:      edge cost = dist_j * ac_0 * l_0 + dist_j * ac_1 * l_1 + ... = sum_(k in areas) dist_j * ac_k * l_ik
+  #   l_ik:     node area one-hot encoding
+
+  # problems:
+  #   SP:  min  c.x,
+  #        s.t. Ax=b, x>=0
+  #   ISP: min  |l-l'|,
+  #        s.t. sum_i a_ij * pi_i = sum_(k in areas) dist_j * ac_k * l_ik,              for all j in desired path
+  #             sum_i a_ij * pi_i + lambda_j = sum_(k in areas) dist_j * ac_k * l_ik,   for all j not in desired path
+  #             sum_k l_ik = 1                                                          for all i
+  #             lambda >= 0,                                                            for all j not in desired path.
+
+  # auxiliary variables
+  edge2index = {}
+  edges = []
+  edge2varnodeindex = {}
+  varnodes = []
+  for (i,j) in graph.edges:
+    edge2index[i,j] = len(edges)
+    edges.append([i,j])
+    edge2index[j,i] = len(edges)
+    edges.append([j,i])
+    if not graph.nodes[i]["portal"]:
+      vn = i
+    else:
+      vn = j
+    if vn in varnodes:
+      idx = varnodes.index(vn)
+    else:
+      idx = len(varnodes)
+      varnodes.append(vn)
+    edge2varnodeindex[i,j] = idx
+    edge2varnodeindex[j,i] = idx
+  node2index = {}
+  nodes = []
+  for n in graph.nodes:
+    node2index[n] = len(nodes)
+    nodes.append(n)
+    if n == desiredPath[0]:
+      s = node2index[n]
+    if n == desiredPath[-1]:
+      t = node2index[n]
+
+  # l_original
+  l_original = np.zeros(len(varnodes) * len(allowedAreaTypes))
+  for (i,j) in graph.edges:
+    idx = edge2varnodeindex[i,j]
+    node = varnodes[idx]
+    for k in range(len(allowedAreaTypes)):
+      if allowedAreaTypes[k] == graph.nodes[node]["area"]:
+        l_original[len(allowedAreaTypes) * idx + k] = 1
+      else:
+        l_original[len(allowedAreaTypes) * idx + k] = 0
+
+  # Ax = b
+  A = np.zeros([len(nodes), len(edges)])
+  b = np.zeros(len(nodes))
+  for i in range(len(nodes)):
+    for nei in graph.adj[nodes[i]]:
+      j = edge2index[nodes[i], nei]
+      A[i,j] = 1
+      j = edge2index[nei, nodes[i]]
+      A[i,j] =-1
+    if i == s:
+      b[i] = 1
+    if i == t:
+      b[i] =-1
+
+  # optimal x
+  path = nx.shortest_path(graph, source=desiredPath[0], target=desiredPath[-1], weight="weight")
+  xstar = np.zeros(len(edges))
+  for p in range(len(path)-1):
+    j = edge2index[path[p], path[p+1]]
+    xstar[j] = 1
+
+  # desired x
+  xzero = np.zeros(len(edges))
+  for p in range(len(desiredPath)-1):
+    j = edge2index[desiredPath[p], desiredPath[p+1]]
+    xzero[j] = 1
+
+  # inverse optimization problem
+  c_ = cp.Variable(len(areaCosts))
+  pi_ = cp.Variable(len(nodes))
+  lambda_ = cp.Variable(len(edges))
+  # cost
+  cost = cp.norm1(c_ - areaCosts)
+  # constraints
+  constraints = []
+  for j in range(len(edges)):
+    edge = edges[j]
+    i = edge2varnodeindex[edge[0], edge[1]]
+    # edge's new cost d_j = sum_(k in areas) dist_j * ac_k * l_ik
+    d_j = 0
+    dist_j = dist(graph.nodes[edge[0]]["point"], graph.nodes[edge[1]]["point"])
+    for k in range(len(allowedAreaTypes)):
+      ac_k = c_[allowedAreaTypes[k]]
+      d_j += dist_j * ac_k * l_original[len(allowedAreaTypes) * i + k]
+    if xzero[j] == 1:
+      # sum_i a_ij * pi_i = d_j,              for all j in desired path
+      constraints.append( cp.sum(cp.multiply(A[:,j], pi_)) == d_j )
+    else:
+      # sum_i a_ij * pi_i + lambda_j = d_j,   for all j not in desired path
+      constraints.append( cp.sum(cp.multiply(A[:,j], pi_)) + lambda_[j] == d_j )
+  # sum_k l_ik = 1, for all i
+  for i in range(len(varnodes)):
+    idx = len(allowedAreaTypes) * i
+    constraints.append( cp.sum(l_original[idx:idx+len(allowedAreaTypes)]) == 1 )
+  # lambda >= 0, for all j not in desired path.
+  for j in range(len(edges)):
+    if xzero[j] == 0:
+      constraints.append( lambda_[j] >= 0 )
+
+  # solve with cvxpy
+  prob = cp.Problem(cp.Minimize(cost), constraints)
+  if exact:
+    value = prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":-1}, verbose=verbose)
+  else:
+    value = prob.solve(solver=cp.GUROBI, verbose=verbose)
+  if value == float('inf'):
+    rospy.loginfo("  inverse shortest path MILP failed")
+    return []
+
+  # new graph
+  newGraph = graph.copy()
+  changed = 0
+  for j in range(len(edges)):
+    edge = edges[j]
+    i = edge2varnodeindex[edge[0], edge[1]]
+    area = newGraph[edge[0]][edge[1]]["area"]
+    newGraph[edge[0]][edge[1]]["area"] = area
+    newGraph[edge[0]][edge[1]]["cost"] = c_.value[area]
+    newGraph[edge[0]][edge[1]]["weight"] = c_.value[area] * dist(graph.nodes[edge[0]]["point"], graph.nodes[edge[1]]["point"])
+    if not newGraph.nodes[edge[0]]["portal"]:
+      newGraph.nodes[edge[0]]["cost"] = c_.value[area]
+    if not newGraph.nodes[edge[1]]["portal"]:
+      newGraph.nodes[edge[1]]["cost"] = c_.value[area]
+
+  rospy.loginfo("Explanation: %s" % str(c_.value))
+  return c_.value, newGraph
+
+
 def optInvMILP(graph, desiredPath, areaCosts, allowedAreaTypes, exact=True, verbose=True):
 
   # variables:
@@ -2393,12 +2543,14 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
   rospy.loginfo("Benchmarking %s..." % problem_type)
 
   ### inverse optimization methods
-  if problem_type in ["invLP", "invMILP", "invMILPapprox", "astarPolyLabels"]:
+  if problem_type in ["invLP", "invCOT", "invMILP", "invMILPapprox", "astarPolyLabels"]:
 
     # compute explanation
     time1 = time.clock()
     if problem_type == "invLP":
       newweights, newgraph = optInvLP(graph, desired_path)
+    if problem_type == "invCOT":
+      newAreaCosts, newgraph = optInvCOT(graph, desired_path, area_costs, [1,2], exact=True, verbose=verbose)
     if problem_type == "invMILP":
       newweights, newgraph = optInvMILP(graph, desired_path, area_costs, [1,2], exact=True, verbose=verbose)
     if problem_type == "invMILPapprox":
@@ -2421,6 +2573,10 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
       for edge in list(graph.edges):
         x1.append(graph[edge[0]][edge[1]]["area"])
         x2.append(newgraph[edge[0]][edge[1]]["area"])
+    if problem_type == "invCOT":
+      for area in [1,2]:
+        x1.append(area_costs[area])
+        x2.append(newAreaCosts[area])
     x1 = np.array(x1)
     x2 = np.array(x2)
     l1norm = np.linalg.norm(x2 - x1, 1)
@@ -2960,7 +3116,8 @@ if __name__ == "__main__":
 
     if False:
       rospy.loginfo("Running benchmark for polyLabels [astar VS invopt]...")
-      results2 = benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invMILP", verbose=False, acceptable_dist=0.0)
+      results2 = []
+      results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invMILP", verbose=False, acceptable_dist=0.0)
       results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "astarPolyLabels", verbose=False, acceptable_dist=0.0)
       rospy.loginfo("Benchmark for polyLabels [astar VS invopt]:")
       rospy.loginfo("\n"+str(tabulate(results2, headers="keys")))
@@ -2976,6 +3133,7 @@ if __name__ == "__main__":
       results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", verbose=False, acceptable_dist=0.0)
       results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", verbose=False, acceptable_dist=0.0)
       results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPathTradeoff4", verbose=False, acceptable_dist=0.0)
+      results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invCOT", verbose=False, acceptable_dist=0.0)
       results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invMILP", verbose=False, acceptable_dist=0.0)
       results2+= benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "invMILPapprox", verbose=False, acceptable_dist=0.0)
       rospy.loginfo("Benchmark for polyCosts:")
