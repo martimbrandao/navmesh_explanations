@@ -166,9 +166,11 @@ def graphToNavmesh(graph, navmesh, area2color):
 
 
 def graphToMarkerArray(graph, height):
+  # darkness
+  dark = 0.85
   # edges
-  graphmarker1 = newMarker(0, Marker.LINE_LIST, 0.05, [0,0,1,1])
-  graphmarker2 = newMarker(1, Marker.LINE_LIST, 0.05, [1,0,1,1])
+  graphmarker1 = newMarker(0, Marker.LINE_LIST, 0.05, [0.6509804129600525*dark, 0.7411764860153198*dark, 0.843137264251709*dark, 1.0])
+  graphmarker2 = newMarker(1, Marker.LINE_LIST, 0.05, [0.7568627595901489*dark, 0.0,                     0.125490203499794*dark, 1.0])
   for edge in list(graph.edges):
     if graph[edge[0]][edge[1]]["area"] == 1:
       graphmarker1.points.append(newPoint(graph.nodes[edge[0]]["point"], height))
@@ -177,8 +179,8 @@ def graphToMarkerArray(graph, height):
       graphmarker2.points.append(newPoint(graph.nodes[edge[0]]["point"], height))
       graphmarker2.points.append(newPoint(graph.nodes[edge[1]]["point"], height))
   # nodes
-  nodemarker1 = newMarker(2, Marker.SPHERE_LIST, 0.2, [0,0,1,1])
-  nodemarker2 = newMarker(3, Marker.SPHERE_LIST, 0.2, [1,0,1,1])
+  nodemarker1 = newMarker(2, Marker.SPHERE_LIST, 0.2, [0.6509804129600525*dark, 0.7411764860153198*dark, 0.843137264251709*dark, 1.0])
+  nodemarker2 = newMarker(3, Marker.SPHERE_LIST, 0.2, [0.7568627595901489*dark, 0.0,                     0.125490203499794*dark, 1.0])
   nodemarker3 = newMarker(4, Marker.SPHERE_LIST, 0.1, [0,1,0,1])
   for node in list(graph.nodes):
     if graph.nodes[node]["area"] == 1:
