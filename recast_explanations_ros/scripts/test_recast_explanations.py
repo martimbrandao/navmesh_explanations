@@ -424,7 +424,7 @@ def findShortestPathLP(graph, start, goal):
       b.append(-1)
     else:
       b.append(0)
-  #for n in waypoints: # note: this would just add a "flying" edge with no connections to the shortest path...
+  #for n in waypoints: # note: this would just add a "flying" cycle (e.g. waypoint-neighbor-waypoint that is disconnected from the shortest path...)
   #  # sum_j x_ij = 1
   #  line = [0]*len(edges)
   #  for i,j in edge2index.keys():
@@ -1057,7 +1057,7 @@ def optAreaCosts(graph, areaCosts, desiredPath, badPaths):
 
   # solve with cvxpy (soft constraints version)
   x = cp.Variable(len(areaCosts))
-  cost = cp.norm2(x - np.array(areaCosts)) + 1 * cp.maximum(cp.max(G @ x - h), 0)
+  cost = cp.norm1(x - np.array(areaCosts)) + 1 * cp.maximum(cp.max(G @ x - h), 0)
   prob = cp.Problem(cp.Minimize(cost), [x[0] == 0, x[1:] >= 1])
   value = prob.solve() # depending on problem and penalty weight, might have to use solver=cp.MOSEK
 
@@ -2714,12 +2714,14 @@ if __name__ == "__main__":
   pubDiv4 = rospy.Publisher('graph_diversity4', MarkerArray, queue_size=10)
   pubDiv5 = rospy.Publisher('graph_diversity5', MarkerArray, queue_size=10)
 
-  pubAreaCostsPath =   rospy.Publisher('expl_area_costs_path',   Marker,      queue_size=10)
-  pubAreaCostsGraph =  rospy.Publisher('expl_area_costs_graph',  MarkerArray, queue_size=10)
-  pubPolyCostsPath =   rospy.Publisher('expl_poly_costs_path',   Marker,      queue_size=10)
-  pubPolyCostsGraph =  rospy.Publisher('expl_poly_costs_graph',  MarkerArray, queue_size=10)
-  pubInvLpPath =       rospy.Publisher('expl_inv_lp_path',       Marker,      queue_size=10)
-  pubInvLpGraph =      rospy.Publisher('expl_inv_lp_graph',      MarkerArray, queue_size=10)
+  pubAreaCostsPath =    rospy.Publisher('expl_area_costs_path',    Marker,      queue_size=10)
+  pubAreaCostsGraph =   rospy.Publisher('expl_area_costs_graph',   MarkerArray, queue_size=10)
+  pubAreaCostsNavmesh = rospy.Publisher('expl_area_costs_navmesh', Marker,      queue_size=10)
+
+  pubPolyCostsPath =    rospy.Publisher('expl_poly_costs_path',   Marker,      queue_size=10)
+  pubPolyCostsGraph =   rospy.Publisher('expl_poly_costs_graph',  MarkerArray, queue_size=10)
+  pubInvLpPath =        rospy.Publisher('expl_inv_lp_path',       Marker,      queue_size=10)
+  pubInvLpGraph =       rospy.Publisher('expl_inv_lp_graph',      MarkerArray, queue_size=10)
 
   pubPolyLabelsPath     = rospy.Publisher('expl_poly_labels_path',    Marker,      queue_size=10)
   pubPolyLabelsGraph    = rospy.Publisher('expl_poly_labels_graph',   MarkerArray, queue_size=10)
@@ -2848,6 +2850,8 @@ if __name__ == "__main__":
       copyDict(data1, G.nodes[k1])
       copyDict(data2, G.nodes[k2])
     rospy.loginfo('Finished.')
+
+    rospy.loginfo("Graph |V| = %d, |E| = %d " % (len(G.nodes), len(G.edges)))
 
     # get navmesh
     rospy.loginfo('Getting navmesh...')
@@ -2981,13 +2985,14 @@ if __name__ == "__main__":
       #  pubDiv5.publish( pathsToMarkerArray(G, div5, 0.9) )
 
     # compute & visualize explanations by inverse shortest paths
-    if pubAreaCostsGraph.get_num_connections() > 0 or pubAreaCostsPath.get_num_connections() > 0:
+    if pubAreaCostsGraph.get_num_connections() > 0 or pubAreaCostsPath.get_num_connections() > 0 or pubAreaCostsNavmesh.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on areaCosts...")
       ok1, x1, G1, it1 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaCosts", "kdp-brandao", 2, 10, verbose=False, acceptable_dist=3.0)
       xpath1 = nx.shortest_path(G1, source=pstart, target=pgoal, weight="weight")
       # visualize
       pubAreaCostsPath.publish( pathToMarker(G1, xpath1, 0, [1,0,0,1], 0.9) )
       pubAreaCostsGraph.publish( graphToMarkerArrayByCost(G1, 0.2) )
+      pubAreaCostsNavmesh.publish( graphToNavmesh(G1, navmesh, area2color) )
 
     if pubPolyCostsPath.get_num_connections() > 0 or pubPolyCostsGraph.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on polyCosts...")

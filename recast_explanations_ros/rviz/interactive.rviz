@@ -31,6 +31,9 @@ Panels:
         - /MarkerArray6
         - /Marker17
         - /Marker18
+        - /MarkerArray7
+        - /Marker19
+        - /Marker20
       Splitter Ratio: 0.5009041428565979
     Tree Height: 791
   - Class: rviz/Selection
@@ -255,6 +258,30 @@ Visualization Manager:
     - Class: rviz/Marker
       Enabled: false
       Marker Topic: /expl_astar_poly_labels_path
+      Name: Marker
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/MarkerArray
+      Enabled: false
+      Marker Topic: /expl_area_costs_graph
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: false
+      Marker Topic: /expl_area_costs_navmesh
+      Name: Marker
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
+    - Class: rviz/Marker
+      Enabled: false
+      Marker Topic: /expl_area_costs_path
       Name: Marker
       Namespaces:
         {}
