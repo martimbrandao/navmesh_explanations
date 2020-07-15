@@ -30,6 +30,7 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   visualization_msgs
   interactive_markers
+  recast_ros
 )
 
 ## System dependencies are found with CMake's conventions
@@ -133,7 +134,7 @@ generate_dynamic_reconfigure_options(
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES recast_explanations_ros
-  CATKIN_DEPENDS roscpp roslib rospy std_msgs geometry_msgs visualization_msgs interactive_markers
+  CATKIN_DEPENDS roscpp roslib rospy std_msgs geometry_msgs visualization_msgs interactive_markers recast_ros
 #  DEPENDS system_lib
 )
 
@@ -158,6 +159,7 @@ include_directories(
 
 add_executable(interface_node src/interface_node.cpp)
 target_link_libraries(interface_node ${catkin_LIBRARIES})
+add_dependencies(interface_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 
 #############
