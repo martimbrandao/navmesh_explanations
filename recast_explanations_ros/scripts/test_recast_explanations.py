@@ -159,8 +159,9 @@ def pathsToMarkerArray(graph, paths, height):
   return markers
 
 
-def graphToNavmesh(graph, navmesh, area2color):
+def graphToNavmesh(graph, navmesh, area2color, alpha=0.5):
   newnavmesh = newMarker(navmesh.id, navmesh.type, 1, None)
+  newnavmesh.color.a = 1.0
   for node in graph.nodes:
     if not graph.nodes[node]["portal"]:
       idx = graph.nodes[node]["idx_tri"]
@@ -171,7 +172,7 @@ def graphToNavmesh(graph, navmesh, area2color):
         roscolor.r = color[0]
         roscolor.g = color[1]
         roscolor.b = color[2]
-        roscolor.a = color[3]
+        roscolor.a = alpha
         newnavmesh.points.append(navmesh.points[i])
         newnavmesh.colors.append(roscolor)
   return newnavmesh
