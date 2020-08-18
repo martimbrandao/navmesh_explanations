@@ -116,6 +116,11 @@ struct RecastNode
   // Interactive markers for triangles
   void pathPlannerMenu()
   {
+    // make navmesh transparent
+    for (unsigned int i = 0; i < navMeshFiltered_.colors.size(); i++)
+      navMeshFiltered_.colors[i].a = 0.5;
+
+    // prepare interactive marker
     visualization_msgs::InteractiveMarker intMarker;
     visualization_msgs::InteractiveMarkerControl intControl;
 

@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 
+# TODO:
+# - recast_ros create my own launch/cfg that I can edit
+# - recast_ros publish both graph and graph_filtered, change rviz config to show filtered
+# - interface can publish both a marker and marker_filtered
+# - publish explanation visualization here (marker with lines)
+# - test to find issues. predicted: shortest-bridge might be through a wall (hard), should also show shortest-freespace-bridge (need raycasting or similar here)
+
 import networkx as nx
 import numpy as np
 import cvxpy as cp
