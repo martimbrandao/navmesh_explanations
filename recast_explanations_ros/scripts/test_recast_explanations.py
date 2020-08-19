@@ -103,7 +103,7 @@ def getCost(graph, path):
 def getResultStats(results, statvars):
   if len(results) == 0:
     return []
-  newresults = results[0]
+  newresults = results[0].copy()
   dictresults = {k: [dic[k] for dic in results] for k in results[0]}
   for var in statvars:
     newresults[var+'_mean'] = np.mean(dictresults[var])
@@ -145,6 +145,24 @@ def pathToMarker(graph, path, id, color, height):
   for i in range(len(path)-1):
     marker.points.append(newPoint(graph.nodes[path[i  ]]["point"], height))
     marker.points.append(newPoint(graph.nodes[path[i+1]]["point"], height))
+  return marker
+
+
+def pathIterationsToMarker(graph, paths, id, height):
+  marker = newMarker(id, Marker.LINE_LIST, 0.1, [0,0,0,1])
+  for p in range(len(paths)):
+    mult = float(len(paths)-p) / float(len(paths))
+    path = paths[p]
+    roscolor = ColorRGBA()
+    roscolor.r = 1
+    roscolor.g = mult
+    roscolor.b = 0
+    roscolor.a = 1
+    for i in range(len(path)-1):
+      marker.points.append(newPoint(graph.nodes[path[i  ]]["point"], height + mult * 0.2))
+      marker.points.append(newPoint(graph.nodes[path[i+1]]["point"], height + mult * 0.2))
+      marker.colors.append(roscolor)
+      marker.colors.append(roscolor)
   return marker
 
 
@@ -2246,7 +2264,7 @@ def optPolyLabelsInPathTradeoff4(graph, areaCosts, desiredPath, verbose=True, di
   for l1 in np.linspace(1, tradeoff_maxL1, 21):
     if verbose:
       rospy.loginfo("Computing best explanation with L1 <= %f ...." % l1)
-    ok, x, G, it = computeExplanationISP(graph, desiredPath[0], desiredPath[-1], areaCosts, desiredPath, "polyLabelsInPathWithL1Target", diversity_method, num_alternatives, max_iter, verbose, acceptable_dist=0.0, args=l1)
+    ok, x, G, it, _ = computeExplanationISP(graph, desiredPath[0], desiredPath[-1], areaCosts, desiredPath, "polyLabelsInPathWithL1Target", diversity_method, num_alternatives, max_iter, verbose, acceptable_dist=0.0, args=l1)
     # save
     curve_newgraph.append(G)
     curve_newpolylabels.append(x)
@@ -2478,7 +2496,7 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
   path = nx.shortest_path(graph, source=start, target=goal, weight="weight")
   if path == desired_path:
     rospy.loginfo("Shortest path is already equal to desired. Nothing to explain.")
-    return True, [], graph.copy(), 0
+    return True, [], graph.copy(), 0, []
 
   # init
   desired_is_shortest = False
@@ -2517,7 +2535,7 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
     elif problem_type == "polyLabelsApproxFromCosts":
       x,newgraph = optPolyLabelsApproxFromCosts(graph, area_costs, [1,2], desired_path, all_alternative_paths)
     elif problem_type == "polyLabelsApproxFromCosts2":
-      ok1, x1, opt_costs_graph = computeExplanationISP(graph, start, goal, area_costs, desired_path, "polyCosts", diversity_method, num_alternatives, max_iter, False)
+      ok1, x1, opt_costs_graph, _ = computeExplanationISP(graph, start, goal, area_costs, desired_path, "polyCosts", diversity_method, num_alternatives, max_iter, False)
       x, newgraph = optPolyLabelsApproxFromCosts2(graph, area_costs, [1,2], desired_path, all_alternative_paths, opt_costs_graph)
     elif problem_type == "polyLabels":
       x,newgraph = optPolyLabels(graph, area_costs, desired_path, all_alternative_paths)
@@ -2557,7 +2575,7 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
   if verbose:
     rospy.loginfo("...finished %s in %d iterations. Best explanation leads to a shortest-desired path distance = %f" % (problem_type, it+1, history_explanation_distances[best_explanation]))
 
-  return desired_is_shortest, x, newgraph, it+1
+  return desired_is_shortest, x, newgraph, it+1, history_explanations
 
 
 def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, verbose, acceptable_dist):
@@ -2647,7 +2665,7 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
           newgraph = vG[ np.where(vdist <= min(vdist))[0][0] ]
           num_iter = 1
         else:
-          ok, x, newgraph, num_iter = computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, diversity_method, num_alternatives, max_iter, verbose, acceptable_dist)
+          ok, x, newgraph, num_iter, _ = computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, diversity_method, num_alternatives, max_iter, verbose, acceptable_dist)
         time2 = time.clock()
 
         # compute shortest path
@@ -2739,6 +2757,7 @@ if __name__ == "__main__":
   pubGraphCosts = rospy.Publisher('graph_costs', MarkerArray, queue_size=10)
   pubPath = rospy.Publisher('graph_path', Marker, queue_size=10)
   pubPathDesired = rospy.Publisher('graph_path_desired', Marker, queue_size=10)
+  pubNavmesh = rospy.Publisher('expl_original_navmesh', Marker, queue_size=10)
 
   rospy.Subscriber("/recast_explanations_interface/contrastive_position", Point, callbackContrastiveWaypoint)
 
@@ -2760,6 +2779,7 @@ if __name__ == "__main__":
   pubPolyLabelsPath     = rospy.Publisher('expl_poly_labels_path',    Marker,      queue_size=10)
   pubPolyLabelsGraph    = rospy.Publisher('expl_poly_labels_graph',   MarkerArray, queue_size=10)
   pubPolyLabelsNavmesh  = rospy.Publisher('expl_poly_labels_navmesh', Marker,      queue_size=10)
+  pubPolyLabelsPathIts  = rospy.Publisher('expl_poly_labels_path_iterations', Marker, queue_size=10)
 
   pubPolyLabels4Path    = rospy.Publisher('expl_poly_labels4_path',    Marker,      queue_size=10)
   pubPolyLabels4Graph   = rospy.Publisher('expl_poly_labels4_graph',   MarkerArray, queue_size=10)
@@ -3018,10 +3038,14 @@ if __name__ == "__main__":
       #  div5 = kDiversePathsRRT(G, pstart, pgoal, k)
       #  pubDiv5.publish( pathsToMarkerArray(G, div5, 0.9) )
 
+    # send original navmesh
+    if pubNavmesh.get_num_connections() > 0:
+      pubNavmesh.publish( graphToNavmesh(G, navmesh, area2color) )
+
     # compute & visualize explanations by inverse shortest paths
     if pubAreaCostsGraph.get_num_connections() > 0 or pubAreaCostsPath.get_num_connections() > 0 or pubAreaCostsNavmesh.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on areaCosts...")
-      ok1, x1, G1, it1 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaCosts", "ksp", 1, 5, verbose=False, acceptable_dist=3.0)
+      ok1, x1, G1, it1, _ = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaCosts", "ksp", 1, 5, verbose=False, acceptable_dist=3.0)
       xpath1 = nx.shortest_path(G1, source=pstart, target=pgoal, weight="weight")
       # visualize
       pubAreaCostsPath.publish( pathToMarker(G1, xpath1, 0, [1,0,0,1], 0.9) )
@@ -3030,7 +3054,7 @@ if __name__ == "__main__":
 
     if pubPolyCostsPath.get_num_connections() > 0 or pubPolyCostsGraph.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on polyCosts...")
-      ok2, x2, G2, it2 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts", "ksp", 1, 5, verbose=False, acceptable_dist=3.0)
+      ok2, x2, G2, it2, _ = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts", "ksp", 1, 5, verbose=False, acceptable_dist=3.0)
       xpath2 = nx.shortest_path(G2, source=pstart, target=pgoal, weight="weight")
       # visualize
       pubPolyCostsPath.publish( pathToMarker(G2, xpath2, 0, [1,0,0,1], 0.9) )
@@ -3055,13 +3079,15 @@ if __name__ == "__main__":
 
     if pubPolyLabelsPath.get_num_connections() > 0 or pubPolyLabelsGraph.get_num_connections() > 0 or pubPolyLabelsNavmesh.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on polyLabelsInPath...")
-      ok3, x3, G3, it3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", "ksp", 1, 5, verbose=True, acceptable_dist=1.0)
+      ok3, x3, G3, it3, hist3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", "ksp", 1, 10, verbose=True, acceptable_dist=1.0)
       xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
+      xpaths3 = [nx.shortest_path(it_graph, source=pstart, target=pgoal, weight="weight") for it_graph in hist3]
       # visualize
       G3changes = getGraphChangesForVis(G, G3)
       pubPolyLabelsPath.publish( pathToMarker(G3, xpath3, 0, [1,0,0,1], 0.9) )
       pubPolyLabelsGraph.publish( graphToMarkerArray(G3, 0.2) )
       pubPolyLabelsNavmesh.publish( graphToNavmesh(G3, navmesh, area2color) )
+      pubPolyLabelsPathIts.publish( pathIterationsToMarker(G3, xpaths3, 0, 0.9) )
 
     if pubPolyLabels4Path.get_num_connections() > 0 or pubPolyLabels4Graph.get_num_connections() > 0 or pubPolyLabels4Navmesh.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on polyLabelsInPathTradeoff4...")
@@ -3076,7 +3102,7 @@ if __name__ == "__main__":
 
     if pubAreaLabelsPath.get_num_connections() > 0 or pubAreaLabelsGraph.get_num_connections() > 0 or pubAreaLabelsNavmesh.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on areaLabelsEnum...")
-      ok4, x4, G4, it4 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", "ksp", 1, 5, verbose=False, acceptable_dist=3.0)
+      ok4, x4, G4, it4, _ = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", "ksp", 1, 5, verbose=False, acceptable_dist=3.0)
       xpath4 = nx.shortest_path(G4, source=pstart, target=pgoal, weight="weight")
       # visualize
       G4changes = getGraphChangesForVis(G, G4)
@@ -3191,6 +3217,15 @@ if __name__ == "__main__":
       rospy.loginfo("\n"+str(tabulate(results_poly, headers="keys")))
       rospy.loginfo("Results for polyLabelsInPath (stats):")
       rospy.loginfo("\n"+str(tabulate(results2_poly, headers="keys")))
+      # astarPolyLabels
+      results_star = []
+      for i in range(10):
+        results_star += benchmarkExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "astarPolyLabels", verbose=False, acceptable_dist=0.0)
+      results2_star = getResultStats(results_star, ["time"])
+      rospy.loginfo("Results for astarPolyLabels:")
+      rospy.loginfo("\n"+str(tabulate(results_star, headers="keys")))
+      rospy.loginfo("Results for astarPolyLabels (stats):")
+      rospy.loginfo("\n"+str(tabulate(results2_star, headers="keys")))
       # invMILP
       results_milp = []
       for i in range(10):
@@ -3201,10 +3236,11 @@ if __name__ == "__main__":
       rospy.loginfo("Results for invMILP (stats):")
       rospy.loginfo("\n"+str(tabulate(results2_milp, headers="keys")))
       # all
-      results = results_poly + results_milp
-      results2 = results2_poly + results2_milp
+      results = results_poly + results_milp + results_star
+      results2 = results2_poly + results2_milp + results2_star
       rospy.loginfo("Results for all:")
       rospy.loginfo("\n"+str(tabulate(results, headers="keys")))
       rospy.loginfo("Results for all (stats):")
       rospy.loginfo("\n"+str(tabulate(results2, headers="keys")))
+      break
 

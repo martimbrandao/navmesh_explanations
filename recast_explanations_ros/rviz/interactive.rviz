@@ -13,27 +13,28 @@ Panels:
         - /Marker4
         - /Marker5
         - /Marker6
-        - /MarkerArray1
         - /Marker7
+        - /MarkerArray1
         - /Marker8
-        - /MarkerArray2
         - /Marker9
+        - /MarkerArray2
         - /Marker10
-        - /MarkerArray3
         - /Marker11
+        - /MarkerArray3
         - /Marker12
-        - /MarkerArray4
         - /Marker13
+        - /MarkerArray4
         - /Marker14
-        - /MarkerArray5
         - /Marker15
+        - /MarkerArray5
         - /Marker16
-        - /MarkerArray6
         - /Marker17
+        - /MarkerArray6
         - /Marker18
-        - /MarkerArray7
         - /Marker19
+        - /MarkerArray7
         - /Marker20
+        - /Marker21
       Splitter Ratio: 0.5009041428565979
     Tree Height: 791
   - Class: rviz/Selection
@@ -87,6 +88,14 @@ Visualization Manager:
       Show Visual Aids: false
       Update Topic: /navmesh_explanations/update
       Value: true
+    - Class: rviz/Marker
+      Enabled: false
+      Marker Topic: /expl_original_navmesh
+      Name: Marker
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: false
     - Class: rviz/Marker
       Enabled: true
       Marker Topic: /recast_node/filtered_navigation_mesh_lines

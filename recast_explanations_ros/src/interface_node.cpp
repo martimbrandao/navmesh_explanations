@@ -117,6 +117,7 @@ struct RecastNode
   void pathPlannerMenu()
   {
     // make navmesh transparent
+    navMeshFiltered_.color.a = 1.0;
     for (unsigned int i = 0; i < navMeshFiltered_.colors.size(); i++)
       navMeshFiltered_.colors[i].a = 0.5;
 
