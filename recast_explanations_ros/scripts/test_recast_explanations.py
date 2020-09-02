@@ -1375,9 +1375,9 @@ def getPolyLabelsAndGraph(x, graph, nodeList, areaCosts):
     newPolyLabels[ graph.nodes[node]["id"] ] = graph.nodes[node]["area"]
   for i in range(len(nodeList)):
     node = nodeList[i]
-    if x.value[i*2]:
+    if x[i*2]:
       area = 1
-    elif x.value[i*2+1]:
+    elif x[i*2+1]:
       area = 2
     else:
       area = -1
@@ -1522,39 +1522,73 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
       weights[2*i  ] *= 10
       weights[2*i+1] *= 10
 
-  # solve with cvxpy (hard constraints version ... has problems when it is impossible that the desired path is shortest)
-  #x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
-  #cost = cp.sum_squares(x - np.array(nodeLabelsHotEnc))
-  #prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, A @ x == b])
-  #prob.solve(solver=cp.MOSEK, verbose=True, mosek_params={"MSK_DPAR_MIO_MAX_TIME":300})
-
-  # solve with cvxpy (soft constraints version)
+  # solve with cvxpy (hard constraints version)
   x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
-  #cost = cp.norm1(cp.multiply(x - nodeLabelsHotEnc, weights)) + 1 * cp.maximum(cp.max(G @ x - h), 0)  # requires many iterations or many badPaths, always has few changes and low (but non-zero) error
-  #cost = cp.norm1(x - nodeLabelsHotEnc) + 1 * cp.maximum(cp.max(G @ x - h), 0)  # requires many iterations or many badPaths, always has few changes and low (but non-zero) error
-  #cost = cp.norm1(x - nodeLabelsHotEnc) + 0.1 * cp.sum(G @ x - h)              # too many changed variables (so that cost of desired is as low as possible) but zero error
-  cost = cp.norm1(cp.multiply(x - nodeLabelsHotEnc, weights)) + 1 * cp.sum(G @ x - h)              # too many changed variables (so that cost of desired is as low as possible) but zero error
-  prob = cp.Problem(cp.Minimize(cost), [A @ x == b])
-  #prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
-  prob.solve(solver=cp.GUROBI)
+  cost = cp.norm1(cp.multiply(x - nodeLabelsHotEnc, weights))
+  prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, A @ x == b])
+  result = prob.solve(solver=cp.GUROBI)
+  if result == float('inf'):
+    rospy.loginfo("failed")
+    return [], graph, []
 
   # get new labels and graph
-  newPolyLabels, newGraph = getPolyLabelsAndGraph(x, graph, nodeList, areaCosts)
+  newPolyLabels, newGraph = getPolyLabelsAndGraph(x.value, graph, nodeList, areaCosts)
   newPath = nx.shortest_path(newGraph, source=desiredPath[0], target=desiredPath[-1], weight="weight")
 
-  # if solved, try to reduce L1
-  if pathDistance(desiredPath, newPath) == 0:
-    #L1norm = np.linalg.norm(x.value - nodeLabelsHotEnc, 1)
-    cost = cp.norm1(cp.multiply(x - nodeLabelsHotEnc, weights))
-    prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, A @ x == b])
-    prob.solve(solver=cp.GUROBI, warm_start=True)
-    newPolyLabels, newGraph = getPolyLabelsAndGraph(x, graph, nodeList, areaCosts)
-    # report L1norm gain
-    #L1norm_after = np.linalg.norm(x.value - nodeLabelsHotEnc, 1)
-    #rospy.loginfo("L1 before hardsolve: %f" % L1norm)
-    #rospy.loginfo("L1 after hardsolve : %f" % L1norm_after)
+  # if converged then enumerate all optimal solutions
+  if False and pathDistance(desiredPath, newPath) == 0:
+    # https://www.ibm.com/support/pages/using-cplex-examine-alternate-optimal-solutions
+    # Let x{S} be the binary variables. Suppose you have a binary solution x* in available from the most recent optimization. Let N be the subset of S such that x*[n] = 1 for all n in N
+    # Then, add the following constraint:
+    # sum{n in N} x[n] - sum{s in S\N} x[s] <= |N|-1
+    #rospy.loginfo('Enumerating all optimal solutions...')
+    all_solutions = [x.value]
+    constraint_prev_sols = []
+    constraint_same_l1 = (cp.norm1(cp.multiply(x - nodeLabelsHotEnc, weights)) <= prob.value)
+    while True:
+      diff = (x.value==1) * 1 - (x.value==0) * 1
+      constraint_prev_sols.append( diff @ x <= np.sum(x.value==1) - 1 )
+      prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, A @ x == b, constraint_same_l1] + constraint_prev_sols)
+      res = prob.solve(solver=cp.GUROBI)
+      if res == float('inf'):
+        rospy.loginfo('Number of optimal solutions: %d' % len(all_solutions))
+        allGraphs = []
+        for i in range(len(all_solutions)):
+          sol = all_solutions[i]
+          _, solg = getPolyLabelsAndGraph(sol, graph, nodeList, areaCosts)
+          allGraphs.append(solg)
+        return newPolyLabels, newGraph, allGraphs
+      all_solutions.append(x.value)
 
-  return newPolyLabels, newGraph
+  return newPolyLabels, newGraph, []
+
+  ## solve with cvxpy (soft constraints version)
+  #x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
+  ##cost = cp.norm1(cp.multiply(x - nodeLabelsHotEnc, weights)) + 1 * cp.maximum(cp.max(G @ x - h), 0)  # requires many iterations or many badPaths, always has few changes and low (but non-zero) error
+  ##cost = cp.norm1(x - nodeLabelsHotEnc) + 1 * cp.maximum(cp.max(G @ x - h), 0)  # requires many iterations or many badPaths, always has few changes and low (but non-zero) error
+  ##cost = cp.norm1(x - nodeLabelsHotEnc) + 0.1 * cp.sum(G @ x - h)              # too many changed variables (so that cost of desired is as low as possible) but zero error
+  #cost = cp.norm1(cp.multiply(x - nodeLabelsHotEnc, weights)) + 1 * cp.sum(G @ x - h)              # too many changed variables (so that cost of desired is as low as possible) but zero error
+  #prob = cp.Problem(cp.Minimize(cost), [A @ x == b])
+  ##prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
+  #prob.solve(solver=cp.GUROBI)
+  #
+  ## get new labels and graph
+  #newPolyLabels, newGraph = getPolyLabelsAndGraph(x.value, graph, nodeList, areaCosts)
+  #newPath = nx.shortest_path(newGraph, source=desiredPath[0], target=desiredPath[-1], weight="weight")
+  #
+  ## if solved, try to reduce L1
+  #if pathDistance(desiredPath, newPath) == 0:
+  #  #L1norm = np.linalg.norm(x.value - nodeLabelsHotEnc, 1)
+  #  cost = cp.norm1(cp.multiply(x - nodeLabelsHotEnc, weights))
+  #  prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, A @ x == b])
+  #  prob.solve(solver=cp.GUROBI, warm_start=True)
+  #  newPolyLabels, newGraph = getPolyLabelsAndGraph(x.value, graph, nodeList, areaCosts)
+  #  # report L1norm gain
+  #  #L1norm_after = np.linalg.norm(x.value - nodeLabelsHotEnc, 1)
+  #  #rospy.loginfo("L1 before hardsolve: %f" % L1norm)
+  #  #rospy.loginfo("L1 after hardsolve : %f" % L1norm_after)
+  #
+  #return newPolyLabels, newGraph
 
 
 #def optPolyLabelsInPathItLog(graph, areaCosts, desiredPath, badPaths):
@@ -1726,7 +1760,7 @@ def optPolyLabelsInPathTradeoff(graph, areaCosts, desiredPath, badPaths):
       prob = cp.Problem(cp.Minimize(cost), [A @ x == b, G @ x <= h2])
       result = prob.solve(solver=cp.MOSEK, mosek_params={"MSK_DPAR_MIO_MAX_TIME":90})
     # get new graph/labels
-    newPolyLabels, newGraph = getPolyLabelsAndGraph(x, graph, nodeList, areaCosts)
+    newPolyLabels, newGraph = getPolyLabelsAndGraph(x.value, graph, nodeList, areaCosts)
     # save
     curve_newgraph.append(newGraph)
     curve_newpolylabels.append(newPolyLabels)
@@ -1869,7 +1903,7 @@ def optPolyLabelsInPathTradeoff2(graph, areaCosts, desiredPath, badPaths):
   costG_lb = np.max(G @ x.value - h)
   rospy.loginfo(costG_lb)
 
-  lb_newPolyLabels, lb_newGraph = getPolyLabelsAndGraph(x, graph, nodeList, areaCosts)
+  lb_newPolyLabels, lb_newGraph = getPolyLabelsAndGraph(x.value, graph, nodeList, areaCosts)
 
   # trade-off curve
   tradeoffs = []
@@ -1886,7 +1920,7 @@ def optPolyLabelsInPathTradeoff2(graph, areaCosts, desiredPath, badPaths):
     if result == float('inf'):
       rospy.loginfo("failed")
       continue
-    newPolyLabels, newGraph = getPolyLabelsAndGraph(x, graph, nodeList, areaCosts)
+    newPolyLabels, newGraph = getPolyLabelsAndGraph(x.value, graph, nodeList, areaCosts)
     # save
     curve_newgraph.append(newGraph)
     curve_newpolylabels.append(newPolyLabels)
@@ -2085,7 +2119,7 @@ def optPolyLabelsInPathTradeoff3(graph, areaCosts, desiredPath, badPaths):
       rospy.loginfo("failed")
       continue
     # get new graph/labels
-    newPolyLabels, newGraph = getPolyLabelsAndGraph(x, graph, nodeList, areaCosts)
+    newPolyLabels, newGraph = getPolyLabelsAndGraph(x.value, graph, nodeList, areaCosts)
     # save
     curve_newgraph.append(newGraph)
     curve_newpolylabels.append(newPolyLabels)
@@ -2252,7 +2286,7 @@ def optPolyLabelsInPathWithL1Target(graph, areaCosts, desiredPath, badPaths, l1)
       newPolyLabels[ graph.nodes[node]["id"] ] = graph.nodes[node]["area"]
     return newPolyLabels, graph.copy()
   # get new graph/labels
-  return getPolyLabelsAndGraph(x, graph, nodeList, areaCosts)
+  return getPolyLabelsAndGraph(x.value, graph, nodeList, areaCosts)
 
 
 def optPolyLabelsInPathTradeoff4(graph, areaCosts, desiredPath, verbose=True, diversity_method="kdp-brandao", num_alternatives=2, max_iter=5):
@@ -2264,7 +2298,7 @@ def optPolyLabelsInPathTradeoff4(graph, areaCosts, desiredPath, verbose=True, di
   for l1 in np.linspace(1, tradeoff_maxL1, 21):
     if verbose:
       rospy.loginfo("Computing best explanation with L1 <= %f ...." % l1)
-    ok, x, G, it, _ = computeExplanationISP(graph, desiredPath[0], desiredPath[-1], areaCosts, desiredPath, "polyLabelsInPathWithL1Target", diversity_method, num_alternatives, max_iter, verbose, acceptable_dist=0.0, args=l1)
+    ok, x, G, it, _, _ = computeExplanationISP(graph, desiredPath[0], desiredPath[-1], areaCosts, desiredPath, "polyLabelsInPathWithL1Target", diversity_method, num_alternatives, max_iter, verbose, acceptable_dist=0.0, args=l1)
     # save
     curve_newgraph.append(G)
     curve_newpolylabels.append(x)
@@ -2504,6 +2538,7 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
   all_alternative_paths = []
   history_explanations = []
   history_explanation_distances = []
+  allgraphs = []
 
   # iterate
   for it in range(max_iter):
@@ -2535,12 +2570,12 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
     elif problem_type == "polyLabelsApproxFromCosts":
       x,newgraph = optPolyLabelsApproxFromCosts(graph, area_costs, [1,2], desired_path, all_alternative_paths)
     elif problem_type == "polyLabelsApproxFromCosts2":
-      ok1, x1, opt_costs_graph, _ = computeExplanationISP(graph, start, goal, area_costs, desired_path, "polyCosts", diversity_method, num_alternatives, max_iter, False)
+      ok1, x1, opt_costs_graph, _, _ = computeExplanationISP(graph, start, goal, area_costs, desired_path, "polyCosts", diversity_method, num_alternatives, max_iter, False)
       x, newgraph = optPolyLabelsApproxFromCosts2(graph, area_costs, [1,2], desired_path, all_alternative_paths, opt_costs_graph)
     elif problem_type == "polyLabels":
       x,newgraph = optPolyLabels(graph, area_costs, desired_path, all_alternative_paths)
     elif problem_type == "polyLabelsInPath":
-      x,newgraph = optPolyLabelsInPath(graph, area_costs, desired_path, all_alternative_paths)
+      x,newgraph,allgraphs = optPolyLabelsInPath(graph, area_costs, desired_path, all_alternative_paths)
     elif problem_type == "polyLabelsInPathTradeoff":
       x,newgraph = optPolyLabelsInPathTradeoff(graph, area_costs, desired_path, all_alternative_paths)
     elif problem_type == "polyLabelsInPathTradeoff2":
@@ -2575,7 +2610,7 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
   if verbose:
     rospy.loginfo("...finished %s in %d iterations. Best explanation leads to a shortest-desired path distance = %f" % (problem_type, it+1, history_explanation_distances[best_explanation]))
 
-  return desired_is_shortest, x, newgraph, it+1, history_explanations
+  return desired_is_shortest, x, newgraph, it+1, history_explanations, allgraphs
 
 
 def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, verbose, acceptable_dist):
@@ -2665,7 +2700,7 @@ def benchmarkExplanationISP(graph, start, goal, area_costs, desired_path, proble
           newgraph = vG[ np.where(vdist <= min(vdist))[0][0] ]
           num_iter = 1
         else:
-          ok, x, newgraph, num_iter, _ = computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, diversity_method, num_alternatives, max_iter, verbose, acceptable_dist)
+          ok, x, newgraph, num_iter, _, _ = computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_type, diversity_method, num_alternatives, max_iter, verbose, acceptable_dist)
         time2 = time.clock()
 
         # compute shortest path
@@ -3045,7 +3080,7 @@ if __name__ == "__main__":
     # compute & visualize explanations by inverse shortest paths
     if pubAreaCostsGraph.get_num_connections() > 0 or pubAreaCostsPath.get_num_connections() > 0 or pubAreaCostsNavmesh.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on areaCosts...")
-      ok1, x1, G1, it1, _ = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaCosts", "ksp", 1, 5, verbose=False, acceptable_dist=3.0)
+      ok1, x1, G1, it1, _, _ = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaCosts", "ksp", 1, 5, verbose=False, acceptable_dist=3.0)
       xpath1 = nx.shortest_path(G1, source=pstart, target=pgoal, weight="weight")
       # visualize
       pubAreaCostsPath.publish( pathToMarker(G1, xpath1, 0, [1,0,0,1], 0.9) )
@@ -3054,7 +3089,7 @@ if __name__ == "__main__":
 
     if pubPolyCostsPath.get_num_connections() > 0 or pubPolyCostsGraph.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on polyCosts...")
-      ok2, x2, G2, it2, _ = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts", "ksp", 1, 5, verbose=False, acceptable_dist=3.0)
+      ok2, x2, G2, it2, _, _ = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyCosts", "ksp", 1, 5, verbose=False, acceptable_dist=3.0)
       xpath2 = nx.shortest_path(G2, source=pstart, target=pgoal, weight="weight")
       # visualize
       pubPolyCostsPath.publish( pathToMarker(G2, xpath2, 0, [1,0,0,1], 0.9) )
@@ -3079,7 +3114,7 @@ if __name__ == "__main__":
 
     if pubPolyLabelsPath.get_num_connections() > 0 or pubPolyLabelsGraph.get_num_connections() > 0 or pubPolyLabelsNavmesh.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on polyLabelsInPath...")
-      ok3, x3, G3, it3, hist3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", "ksp", 1, 10, verbose=True, acceptable_dist=1.0)
+      ok3, x3, G3, it3, hist3, allG3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", "ksp", 1, 10, verbose=True, acceptable_dist=0.0)
       xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
       xpaths3 = [nx.shortest_path(it_graph, source=pstart, target=pgoal, weight="weight") for it_graph in hist3]
       # visualize
@@ -3102,7 +3137,7 @@ if __name__ == "__main__":
 
     if pubAreaLabelsPath.get_num_connections() > 0 or pubAreaLabelsGraph.get_num_connections() > 0 or pubAreaLabelsNavmesh.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on areaLabelsEnum...")
-      ok4, x4, G4, it4, _ = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", "ksp", 1, 5, verbose=False, acceptable_dist=3.0)
+      ok4, x4, G4, it4, _, _ = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaLabelsEnum", "ksp", 1, 5, verbose=False, acceptable_dist=3.0)
       xpath4 = nx.shortest_path(G4, source=pstart, target=pgoal, weight="weight")
       # visualize
       G4changes = getGraphChangesForVis(G, G4)
@@ -3243,4 +3278,6 @@ if __name__ == "__main__":
       rospy.loginfo("Results for all (stats):")
       rospy.loginfo("\n"+str(tabulate(results2, headers="keys")))
       break
+
+    #break
 
