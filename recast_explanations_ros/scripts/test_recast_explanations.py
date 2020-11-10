@@ -1552,11 +1552,15 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
       res = prob.solve(solver=cp.GUROBI)
       if res == float('inf'):
         rospy.loginfo('Number of optimal solutions: %d' % len(all_solutions))
+        rospy.loginfo('Checking satisfaction of desired shortest-path...')
         allGraphs = []
         for i in range(len(all_solutions)):
           sol = all_solutions[i]
           _, solg = getPolyLabelsAndGraph(sol, graph, nodeList, areaCosts)
-          allGraphs.append(solg)
+          solp = nx.shortest_path(solg, source=desiredPath[0], target=desiredPath[-1], weight="weight")
+          if pathDistance(desiredPath, solp) == 0:
+            allGraphs.append(solg)
+        rospy.loginfo('Number of optimal solutions where shortest-path is as desired: %d' % len(allGraphs))
         return newPolyLabels, newGraph, allGraphs
       all_solutions.append(x.value)
 
@@ -2530,7 +2534,7 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
   path = nx.shortest_path(graph, source=start, target=goal, weight="weight")
   if path == desired_path:
     rospy.loginfo("Shortest path is already equal to desired. Nothing to explain.")
-    return True, [], graph.copy(), 0, []
+    return True, [], graph.copy(), 0, [], []
 
   # init
   desired_is_shortest = False
@@ -2815,6 +2819,10 @@ if __name__ == "__main__":
   pubPolyLabelsGraph    = rospy.Publisher('expl_poly_labels_graph',   MarkerArray, queue_size=10)
   pubPolyLabelsNavmesh  = rospy.Publisher('expl_poly_labels_navmesh', Marker,      queue_size=10)
   pubPolyLabelsPathIts  = rospy.Publisher('expl_poly_labels_path_iterations', Marker, queue_size=10)
+  pubPolyLabelsNavmesh1  = rospy.Publisher('expl_poly_labels_navmesh1', Marker,      queue_size=10)
+  pubPolyLabelsNavmesh2  = rospy.Publisher('expl_poly_labels_navmesh2', Marker,      queue_size=10)
+  pubPolyLabelsNavmesh3  = rospy.Publisher('expl_poly_labels_navmesh3', Marker,      queue_size=10)
+  pubPolyLabelsNavmesh4  = rospy.Publisher('expl_poly_labels_navmesh4', Marker,      queue_size=10)
 
   pubPolyLabels4Path    = rospy.Publisher('expl_poly_labels4_path',    Marker,      queue_size=10)
   pubPolyLabels4Graph   = rospy.Publisher('expl_poly_labels4_graph',   MarkerArray, queue_size=10)
@@ -3123,6 +3131,14 @@ if __name__ == "__main__":
       pubPolyLabelsGraph.publish( graphToMarkerArray(G3, 0.2) )
       pubPolyLabelsNavmesh.publish( graphToNavmesh(G3, navmesh, area2color) )
       pubPolyLabelsPathIts.publish( pathIterationsToMarker(G3, xpaths3, 0, 0.9) )
+      if len(allG3) > 1:
+        pubPolyLabelsNavmesh1.publish( graphToNavmesh(allG3[1], navmesh, area2color) )
+      if len(allG3) > 2:
+        pubPolyLabelsNavmesh2.publish( graphToNavmesh(allG3[2], navmesh, area2color) )
+      if len(allG3) > 3:
+        pubPolyLabelsNavmesh3.publish( graphToNavmesh(allG3[3], navmesh, area2color) )
+      if len(allG3) > 4:
+        pubPolyLabelsNavmesh4.publish( graphToNavmesh(allG3[4], navmesh, area2color) )
 
     if pubPolyLabels4Path.get_num_connections() > 0 or pubPolyLabels4Graph.get_num_connections() > 0 or pubPolyLabels4Navmesh.get_num_connections() > 0:
       rospy.loginfo("Computing explanation based on polyLabelsInPathTradeoff4...")
