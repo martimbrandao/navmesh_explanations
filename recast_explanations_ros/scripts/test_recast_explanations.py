@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import time
 import random
 import pdb
+import os
 import rospy
 from dynamic_reconfigure.server import Server
 from recast_explanations_ros.cfg import ExplanationsConfig
@@ -16,6 +17,7 @@ from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
 from recast_ros.srv import RecastProjectSrv, RecastProjectSrvRequest
+from recast_ros.srv import RecastPathSrv, RecastPathSrvRequest
 from recast_ros.msg import RecastGraph, RecastGraphNode
 from itertools import islice, product
 from tabulate import tabulate
@@ -34,6 +36,19 @@ def getProj(point):
     rospy.logerr('could not project point')
     exit()
   return proj
+
+
+def getPath(start, goal):
+  try:
+    srv = rospy.ServiceProxy('/recast_node/plan_path', RecastPathSrv)
+    query = RecastPathSrvRequest()
+    query.startXYZ = start;
+    query.goalXYZ = goal;
+    plan = srv(query)
+  except rospy.ServiceException:
+    rospy.logerr('could not plan path')
+    exit()
+  return plan
 
 
 def getKey(pt):
@@ -1367,7 +1382,7 @@ def optPolyLabels(graph, areaCosts, desiredPath, badPaths):
   return newPolyLabels, newGraph
 
 
-def getPolyLabelsAndGraph(x, graph, nodeList, areaCosts):
+def getPolyLabelsAndGraph(x, graph, nodeList, areaCosts, allowedAreaTypes=[1,2]):
   # get new poly labels and graph
   newPolyLabels = [0]*len(graph.nodes)
   newGraph = graph.copy()
@@ -1375,12 +1390,16 @@ def getPolyLabelsAndGraph(x, graph, nodeList, areaCosts):
     newPolyLabels[ graph.nodes[node]["id"] ] = graph.nodes[node]["area"]
   for i in range(len(nodeList)):
     node = nodeList[i]
-    if x[i*2]:
-      area = 1
-    elif x[i*2+1]:
-      area = 2
-    else:
-      area = -1
+    area = -1
+    for j in range(len(allowedAreaTypes)):
+      if x[i * len(allowedAreaTypes) + j]:
+        area = allowedAreaTypes[j]
+    #if x[i*2]:
+    #  area = 1
+    #elif x[i*2+1]:
+    #  area = 2
+    #else:
+    #  area = -1
     newPolyLabels[ graph.nodes[node]["id"] ] = area
     if newGraph.nodes[node]["area"] != -1:
       if area == -1:
@@ -1401,7 +1420,7 @@ def getPolyLabelsAndGraph(x, graph, nodeList, areaCosts):
   return newPolyLabels, newGraph
 
 
-def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
+def optPolyLabelsInPath(graph, areaCosts, allowedAreaTypes, desiredPath, badPaths):
   # variable:     l = nodeLabelsHotEnc                                      # vector of *in-path* node area-labels using one-hot encoding (bool)
   # cost:         (l-nodeLabelsHotEnc)^2
   # constraints:  edgeCost_i = dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1    # for all edges i
@@ -1427,16 +1446,25 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
           break
     # add variables
     if inpath:
-      if graph.nodes[node]["area"] == 1:
-        auxgraph.nodes[node]["varidx"] = len(nodeLabelsHotEnc)
-        nodeLabelsHotEnc.append(1)
-        nodeLabelsHotEnc.append(0)
-        nodeList.append(node)
-      elif graph.nodes[node]["area"] == 2:
-        auxgraph.nodes[node]["varidx"] = len(nodeLabelsHotEnc)
-        nodeLabelsHotEnc.append(0)
-        nodeLabelsHotEnc.append(1)
-        nodeList.append(node)
+      area = graph.nodes[node]["area"]
+      if area not in allowedAreaTypes:
+        continue
+      areaIdx = allowedAreaTypes.index(area)
+      line = [0] * len(allowedAreaTypes)
+      line[areaIdx] = 1
+      auxgraph.nodes[node]["varidx"] = len(nodeLabelsHotEnc)
+      nodeLabelsHotEnc += line
+      nodeList.append(node)
+      #if graph.nodes[node]["area"] == 1:
+      #  auxgraph.nodes[node]["varidx"] = len(nodeLabelsHotEnc)
+      #  nodeLabelsHotEnc.append(1)
+      #  nodeLabelsHotEnc.append(0)
+      #  nodeList.append(node)
+      #elif graph.nodes[node]["area"] == 2:
+      #  auxgraph.nodes[node]["varidx"] = len(nodeLabelsHotEnc)
+      #  nodeLabelsHotEnc.append(0)
+      #  nodeLabelsHotEnc.append(1)
+      #  nodeList.append(node)
   nodeLabelsHotEnc = np.array(nodeLabelsHotEnc)
 
   # path cost constraints
@@ -1447,21 +1475,29 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
     # sum_(i in B) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
     for i in range(len(desiredPath)-1):
       d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
-      if graph.nodes[desiredPath[i]]["portal"] == False:
-        line[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] += d * areaCosts[1]
-        line[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] += d * areaCosts[2]
-      elif graph.nodes[desiredPath[i+1]]["portal"] == False:
-        line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]   ] += d * areaCosts[1]
-        line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]+1 ] += d * areaCosts[2]
+      if graph.nodes[desiredPath[i]]["portal"] == False and "varidx" in auxgraph.nodes[desiredPath[i]]:
+        #line[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] += d * areaCosts[1]
+        #line[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] += d * areaCosts[2]
+        for j in range(len(allowedAreaTypes)):
+          line[ auxgraph.nodes[desiredPath[i]]["varidx"]+j ] += d * areaCosts[allowedAreaTypes[j]]
+      elif graph.nodes[desiredPath[i+1]]["portal"] == False and "varidx" in auxgraph.nodes[desiredPath[i+1]]:
+        #line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]   ] += d * areaCosts[1]
+        #line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]+1 ] += d * areaCosts[2]
+        for j in range(len(allowedAreaTypes)):
+          line[ auxgraph.nodes[desiredPath[i+1]]["varidx"]+j ] += d * areaCosts[allowedAreaTypes[j]]
     # - sum_(i in S) dist_i * ac_0 * l_0 + dist_i * ac_1 * l_1
     for i in range(len(path)-1):
       d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
-      if graph.nodes[path[i]]["portal"] == False:
-        line[ auxgraph.nodes[path[i]]["varidx"]   ] -= d * areaCosts[1]
-        line[ auxgraph.nodes[path[i]]["varidx"]+1 ] -= d * areaCosts[2]
-      elif graph.nodes[path[i+1]]["portal"] == False:
-        line[ auxgraph.nodes[path[i+1]]["varidx"]   ] -= d * areaCosts[1]
-        line[ auxgraph.nodes[path[i+1]]["varidx"]+1 ] -= d * areaCosts[2]
+      if graph.nodes[path[i]]["portal"] == False and "varidx" in auxgraph.nodes[path[i]]:
+        #line[ auxgraph.nodes[path[i]]["varidx"]   ] -= d * areaCosts[1]
+        #line[ auxgraph.nodes[path[i]]["varidx"]+1 ] -= d * areaCosts[2]
+        for j in range(len(allowedAreaTypes)):
+          line[ auxgraph.nodes[path[i]]["varidx"]+j ] -= d * areaCosts[allowedAreaTypes[j]]
+      elif graph.nodes[path[i+1]]["portal"] == False and "varidx" in auxgraph.nodes[path[i+1]]:
+        #line[ auxgraph.nodes[path[i+1]]["varidx"]   ] -= d * areaCosts[1]
+        #line[ auxgraph.nodes[path[i+1]]["varidx"]+1 ] -= d * areaCosts[2]
+        for j in range(len(allowedAreaTypes)):
+          line[ auxgraph.nodes[path[i+1]]["varidx"]+j ] -= d * areaCosts[allowedAreaTypes[j]]
     G.append(line)
     h.append(0)
   G = np.array(G)
@@ -1475,10 +1511,35 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
   b = []
   for i in range(len(nodeList)):
     line = [0]*len(nodeLabelsHotEnc)
-    line[2*i  ] = 1
-    line[2*i+1] = 1
+    for j in range(len(allowedAreaTypes)):
+      line[len(allowedAreaTypes) * i + j] = 1
+    #line[2*i  ] = 1
+    #line[2*i+1] = 1
     A.append(line)
     b.append(1)
+
+  # cost-unique area types
+  if False:
+    rospy.loginfo('Restricting area type changes to single allowed_area_type for each unique area_cost value...')
+    # compute forbidden (cost-repeated) area types
+    uniqueAreaCosts = []
+    forbiddenAreaTypes = []
+    for area in allowedAreaTypes:
+      cost = areaCosts[area]
+      if cost in uniqueAreaCosts:
+        forbiddenAreaTypes.append(area)
+      else:
+        uniqueAreaCosts.append(cost)
+    # set forbidden area types to 0
+    for i in range(len(nodeList)):
+      for j in range(len(allowedAreaTypes)):
+        if allowedAreaTypes[j] in forbiddenAreaTypes:
+          line = [0]*len(nodeLabelsHotEnc)
+          line[len(allowedAreaTypes) * i + j] = 1
+          A.append(line)
+          b.append(0)
+
+  # convert
   A = np.array(A)
   b = np.array(b)
 
@@ -1489,38 +1550,52 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
       if graph.nodes[desiredPath[i]]["portal"] == False:
         if i == 0:
           d = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
-          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] = d
-          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] = d
+          #weights[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] = d
+          #weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] = d
+          for j in range(len(allowedAreaTypes)):
+            weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+j ] = d
         elif i == len(desiredPath)-1:
           d = dist(graph.nodes[desiredPath[i-1]]["point"], graph.nodes[desiredPath[i]]["point"])
-          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] = d
-          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] = d
+          #weights[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] = d
+          #weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] = d
+          for j in range(len(allowedAreaTypes)):
+            weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+j ] = d
         else:
           d1 = dist(graph.nodes[desiredPath[i-1]]["point"], graph.nodes[desiredPath[i]]["point"])
           d2 = dist(graph.nodes[desiredPath[i]]["point"], graph.nodes[desiredPath[i+1]]["point"])
-          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] = d1 + d2
-          weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] = d1 + d2
+          #weights[ auxgraph.nodes[desiredPath[i]]["varidx"]   ] = d1 + d2
+          #weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+1 ] = d1 + d2
+          for j in range(len(allowedAreaTypes)):
+            weights[ auxgraph.nodes[desiredPath[i]]["varidx"]+j ] = d1 + d2
     for path in badPaths:
       for i in range(len(path)):
         if graph.nodes[path[i]]["portal"] == False:
           if i == 0:
             d = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
-            weights[ auxgraph.nodes[path[i]]["varidx"]   ] = d
-            weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d
+            #weights[ auxgraph.nodes[path[i]]["varidx"]   ] = d
+            #weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d
+            for j in range(len(allowedAreaTypes)):
+              weights[ auxgraph.nodes[path[i]]["varidx"]+j ] = d
           elif i == len(path)-1:
             d = dist(graph.nodes[path[i-1]]["point"], graph.nodes[path[i]]["point"])
-            weights[ auxgraph.nodes[path[i]]["varidx"]   ] = d
-            weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d
+            #weights[ auxgraph.nodes[path[i]]["varidx"]   ] = d
+            #weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d
+            for j in range(len(allowedAreaTypes)):
+              weights[ auxgraph.nodes[path[i]]["varidx"]+j ] = d
           else:
             d1 = dist(graph.nodes[path[i-1]]["point"], graph.nodes[path[i]]["point"])
             d2 = dist(graph.nodes[path[i]]["point"], graph.nodes[path[i+1]]["point"])
-            weights[ auxgraph.nodes[path[i]]["varidx"]   ] = d1 + d2
-            weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d1 + d2
+            #weights[ auxgraph.nodes[path[i]]["varidx"]   ] = d1 + d2
+            #weights[ auxgraph.nodes[path[i]]["varidx"]+1 ] = d1 + d2
+            for j in range(len(allowedAreaTypes)):
+              weights[ auxgraph.nodes[path[i]]["varidx"]+j ] = d1 + d2
   #weights = [10]*len(nodeLabelsHotEnc)
   for i in range(len(nodeList)):
     if nodeList[i] not in desiredPath[1:-1]:
-      weights[2*i  ] *= 10
-      weights[2*i+1] *= 10
+      #weights[2*i  ] *= 10
+      #weights[2*i+1] *= 10
+      for j in range(len(allowedAreaTypes)):
+        weights[len(allowedAreaTypes) * i + j] *= 10
 
   # solve with cvxpy (hard constraints version)
   x = cp.Variable(len(nodeLabelsHotEnc), boolean=True)
@@ -1532,11 +1607,11 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
     return [], graph, []
 
   # get new labels and graph
-  newPolyLabels, newGraph = getPolyLabelsAndGraph(x.value, graph, nodeList, areaCosts)
+  newPolyLabels, newGraph = getPolyLabelsAndGraph(x.value, graph, nodeList, areaCosts, allowedAreaTypes)
   newPath = nx.shortest_path(newGraph, source=desiredPath[0], target=desiredPath[-1], weight="weight")
 
   # if converged then enumerate all optimal solutions
-  if False and pathDistance(desiredPath, newPath) == 0:
+  if True and pathDistance(desiredPath, newPath) == 0:
     # https://www.ibm.com/support/pages/using-cplex-examine-alternate-optimal-solutions
     # Let x{S} be the binary variables. Suppose you have a binary solution x* in available from the most recent optimization. Let N be the subset of S such that x*[n] = 1 for all n in N
     # Then, add the following constraint:
@@ -1546,6 +1621,7 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
     constraint_prev_sols = []
     constraint_same_l1 = (cp.norm1(cp.multiply(x - nodeLabelsHotEnc, weights)) <= prob.value)
     while True:
+      rospy.loginfo('Obtained %d optimal solutions...' % len(all_solutions))
       diff = (x.value==1) * 1 - (x.value==0) * 1
       constraint_prev_sols.append( diff @ x <= np.sum(x.value==1) - 1 )
       prob = cp.Problem(cp.Minimize(cost), [G @ x <= h, A @ x == b, constraint_same_l1] + constraint_prev_sols)
@@ -1556,7 +1632,7 @@ def optPolyLabelsInPath(graph, areaCosts, desiredPath, badPaths):
         allGraphs = []
         for i in range(len(all_solutions)):
           sol = all_solutions[i]
-          _, solg = getPolyLabelsAndGraph(sol, graph, nodeList, areaCosts)
+          _, solg = getPolyLabelsAndGraph(sol, graph, nodeList, areaCosts, allowedAreaTypes)
           solp = nx.shortest_path(solg, source=desiredPath[0], target=desiredPath[-1], weight="weight")
           if pathDistance(desiredPath, solp) == 0:
             allGraphs.append(solg)
@@ -2536,6 +2612,27 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
     rospy.loginfo("Shortest path is already equal to desired. Nothing to explain.")
     return True, [], graph.copy(), 0, [], []
 
+  # check area types
+  allowed_area_types = []
+  for node in graph.nodes:
+    area = graph.nodes[node]["area"]
+    if area <= 0:
+      continue
+    if area not in allowed_area_types:
+      allowed_area_types.append(area)
+
+  # cost-unique area types
+  if False:
+    rospy.loginfo('Restricting to single allowed_area_type for each unique area_cost value...')
+    allowed_area_costs = []
+    allowed_area_types2 = []
+    for area in allowed_area_types:
+      cost = area_costs[area]
+      if cost not in allowed_area_costs:
+        allowed_area_costs.append(cost)
+        allowed_area_types2.append(area)
+    allowed_area_types = allowed_area_types2
+
   # init
   desired_is_shortest = False
   newgraph = graph.copy()
@@ -2572,14 +2669,14 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
     elif problem_type == "polyCosts":
       x,newgraph = optPolyCosts(graph, desired_path, all_alternative_paths)
     elif problem_type == "polyLabelsApproxFromCosts":
-      x,newgraph = optPolyLabelsApproxFromCosts(graph, area_costs, [1,2], desired_path, all_alternative_paths)
+      x,newgraph = optPolyLabelsApproxFromCosts(graph, area_costs, allowed_area_types, desired_path, all_alternative_paths)
     elif problem_type == "polyLabelsApproxFromCosts2":
       ok1, x1, opt_costs_graph, _, _ = computeExplanationISP(graph, start, goal, area_costs, desired_path, "polyCosts", diversity_method, num_alternatives, max_iter, False)
-      x, newgraph = optPolyLabelsApproxFromCosts2(graph, area_costs, [1,2], desired_path, all_alternative_paths, opt_costs_graph)
+      x, newgraph = optPolyLabelsApproxFromCosts2(graph, area_costs, allowed_area_types, desired_path, all_alternative_paths, opt_costs_graph)
     elif problem_type == "polyLabels":
       x,newgraph = optPolyLabels(graph, area_costs, desired_path, all_alternative_paths)
     elif problem_type == "polyLabelsInPath":
-      x,newgraph,allgraphs = optPolyLabelsInPath(graph, area_costs, desired_path, all_alternative_paths)
+      x,newgraph,allgraphs = optPolyLabelsInPath(graph, area_costs, allowed_area_types, desired_path, all_alternative_paths)
     elif problem_type == "polyLabelsInPathTradeoff":
       x,newgraph = optPolyLabelsInPathTradeoff(graph, area_costs, desired_path, all_alternative_paths)
     elif problem_type == "polyLabelsInPathTradeoff2":
@@ -2589,9 +2686,9 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
     elif problem_type == "polyLabelsInPathWithL1Target":
       x,newgraph = optPolyLabelsInPathWithL1Target(graph, area_costs, desired_path, all_alternative_paths, args)
     elif problem_type == "areaLabels":
-      x,newgraph = optAreaLabels(graph, area_costs, [1,2], desired_path, all_alternative_paths)
+      x,newgraph = optAreaLabels(graph, area_costs, allowed_area_types, desired_path, all_alternative_paths)
     elif problem_type == "areaLabelsEnum":
-      x,newgraph = optAreaLabelsEnum(graph, area_costs, [1,2], desired_path, all_alternative_paths)
+      x,newgraph = optAreaLabelsEnum(graph, area_costs, allowed_area_types, desired_path, all_alternative_paths)
     time3 = time.clock()
 
     # compute new shortest path
@@ -2792,6 +2889,7 @@ if __name__ == "__main__":
   # ros init
   rospy.init_node('recast_explanations')
 
+  # topics
   pubGraph = rospy.Publisher('graph', MarkerArray, queue_size=10)
   pubGraphCosts = rospy.Publisher('graph_costs', MarkerArray, queue_size=10)
   pubPath = rospy.Publisher('graph_path', Marker, queue_size=10)
@@ -2975,6 +3073,31 @@ if __name__ == "__main__":
     for i in range(len(navmesh_areas)):
       area2color[navmesh_areas[i]] = navmesh_colors[i]
 
+    # saving results for surveys (part 1)
+    if rospy.has_param('/recast_explanations/xpp_save'):
+      # set save params
+      rospy.loginfo('ENTERING MODE: xpp_save')
+      xpp_save = True
+      xpp_start = Point()
+      xpp_start.x = rospy.get_param('/recast_explanations/xpp_start_x')
+      xpp_start.y = rospy.get_param('/recast_explanations/xpp_start_y')
+      xpp_start.z = rospy.get_param('/recast_explanations/xpp_start_z')
+      xpp_goal = Point()
+      xpp_goal.x = rospy.get_param('/recast_explanations/xpp_goal_x')
+      xpp_goal.y = rospy.get_param('/recast_explanations/xpp_goal_y')
+      xpp_goal.z = rospy.get_param('/recast_explanations/xpp_goal_z')
+      xpp_waypoint = Point()
+      xpp_waypoint.x = rospy.get_param('/recast_explanations/xpp_waypoint_x')
+      xpp_waypoint.y = rospy.get_param('/recast_explanations/xpp_waypoint_y')
+      xpp_waypoint.z = rospy.get_param('/recast_explanations/xpp_waypoint_z')
+      xpp_rviz = rospy.get_param('/recast_explanations/xpp_rviz')
+      xpp_save_prefix = rospy.get_param('/recast_explanations/xpp_save_prefix')
+      # set start/goal/waypoint
+      getPath(xpp_start, xpp_goal)
+      contrastive_waypoint = xpp_waypoint
+    else:
+      xpp_save = False
+
     # get path
     rospy.loginfo('Getting path...')
     rospath = rospy.wait_for_message('/recast_node/recast_path_lines', Marker)
@@ -3010,11 +3133,11 @@ if __name__ == "__main__":
     # desired path on graph (v2)
     rospy.loginfo('Computing desired path from waypoint...')
     Gdesired = G.copy()
-    for edge in Gdesired.edges:
-      area = 1
-      Gdesired[edge[0]][edge[1]]["area"] = area
-      Gdesired[edge[0]][edge[1]]["cost"] = areaCosts[area]
-      Gdesired[edge[0]][edge[1]]["weight"] = areaCosts[area] * dist(Gdesired.nodes[edge[0]]["point"], Gdesired.nodes[edge[1]]["point"])
+    #for edge in Gdesired.edges:
+    #  area = 1
+    #  Gdesired[edge[0]][edge[1]]["area"] = area
+    #  Gdesired[edge[0]][edge[1]]["cost"] = areaCosts[area]
+    #  Gdesired[edge[0]][edge[1]]["weight"] = areaCosts[area] * dist(Gdesired.nodes[edge[0]]["point"], Gdesired.nodes[edge[1]]["point"])
     if contrastive_waypoint == None:
       # shortest path on area1
       gpath_desired = nx.shortest_path(Gdesired, source=pstart, target=pgoal, weight="weight")
@@ -3026,10 +3149,65 @@ if __name__ == "__main__":
       gpath_desired = nx.shortest_path(Gdesired, source=pstart, target=pwaypoint, weight="weight")[:-1]
       gpath_desired += nx.shortest_path(Gdesired, source=pwaypoint, target=pgoal, weight="weight")
 
+    # say start/goal/waypoint
+    rospy.loginfo('If you want to use the current start/goal/waypoint in the future:')
+    if pwaypoint != None:
+      print('    <param name="xpp_start_x" value="%f" />' % pstart[0])
+      print('    <param name="xpp_start_y" value="%f" />' % pstart[1])
+      print('    <param name="xpp_start_z" value="%f" />' % pstart[2])
+      print('    <param name="xpp_goal_x" value="%f" />' % pgoal[0])
+      print('    <param name="xpp_goal_y" value="%f" />' % pgoal[1])
+      print('    <param name="xpp_goal_z" value="%f" />' % pgoal[2])
+      print('    <param name="xpp_waypoint_x" value="%f" />' % pwaypoint[0])
+      print('    <param name="xpp_waypoint_y" value="%f" />' % pwaypoint[1])
+      print('    <param name="xpp_waypoint_z" value="%f" />' % pwaypoint[2])
+    else:
+      rospy.loginfo('    ...then please set a waypoint first.')
+
     # compare costs
     cost_path = getCost(G, gpath)
     cost_path_desired = getCost(G, gpath_desired)
     rospy.loginfo('Cost of desired path is %f >= %f' % (cost_path_desired, cost_path))
+
+    # saving results for surveys (part 2)
+    if xpp_save:
+      xpp_wait = 5.0
+
+      # query
+      pubPathDesired.publish( pathToMarker(G, gpath_desired, 0, [0,1,0,1], 0.3) )
+      pubPolyLabelsPath.publish( pathToMarker(G, gpath, 0, [0,0,0,1], 0.4) )
+      pubPolyLabelsNavmesh.publish( graphToNavmesh(G, navmesh, area2color, alpha=1.0) )
+      rospy.sleep(xpp_wait)
+      os.system('import -window "%s" %s_query.png' % (xpp_rviz, xpp_save_prefix))
+
+      # pathcost explanation
+      with open(xpp_save_prefix+"_exp_pathcost.txt","w") as file:
+        file.write("cost_A = %f \n" % cost_path)
+        file.write("cost_B = %f \n" % cost_path_desired)
+
+      # areacosts explanation
+      ok1, x1, _, _, _, _ = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "areaCosts", "ksp", 1, 10, verbose=True, acceptable_dist=0.0)
+      with open(xpp_save_prefix+"_exp_areacosts.txt","w") as file:
+        file.write("areacosts_A = %s \n" % str(areaCosts))
+        if ok1:
+          file.write("areacosts_B = %s \n" % str(x1))
+        else:
+          file.write("areacosts_B = impossible \n")
+
+      # polylabels explanation
+      ok3, _, G3, _, _, allG3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", "ksp", 1, 10, verbose=True, acceptable_dist=0.0)
+      xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
+      pubPolyLabelsPath.publish( pathToMarker(G3, xpath3, 0, [0,0,0,1], 0.4) )
+      pubPolyLabelsNavmesh.publish( graphToNavmesh(G3, navmesh, area2color, alpha=1.0) )
+      rospy.sleep(xpp_wait)
+      os.system('import -window "%s" %s_exp_polylabels.png' % (xpp_rviz, xpp_save_prefix))
+
+      # all_polylabels explanation
+      for i in range(len(allG3)):
+        pubPolyLabelsNavmesh.publish( graphToNavmesh(allG3[i], navmesh, area2color, alpha=1.0) )
+        rospy.sleep(xpp_wait)
+        os.system('import -window "%s" %s_exp_all_polylabels_%03d.png' % (xpp_rviz, xpp_save_prefix, i))
+      exit()
 
     # LP shortest path
     if False:
