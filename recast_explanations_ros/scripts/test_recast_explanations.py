@@ -55,6 +55,46 @@ def getKey(pt):
   return (pt.x, pt.y, pt.z)
 
 
+def getAreaTypes(graph):
+  allowed_area_types = []
+  for node in graph.nodes:
+    area = graph.nodes[node]["area"]
+    if area <= 0:
+      continue
+    if area not in allowed_area_types:
+      allowed_area_types.append(area)
+  return allowed_area_types
+
+
+def getAreaTypesCostUnique(graph, areaCosts):
+  allowedAreaTypes = getAreaTypes(graph)
+  allowed2unique = {}
+  uniqueAreaCosts = []
+  uniqueAreaTypes = []
+  for area in allowedAreaTypes:
+    cost = areaCosts[area]
+    if cost in uniqueAreaCosts:
+      idx = uniqueAreaCosts.index(cost)
+      allowed2unique[area] = uniqueAreaTypes[idx]
+    else:
+      uniqueAreaCosts.append(cost)
+      uniqueAreaTypes.append(area)
+      allowed2unique[area] = area
+  return uniqueAreaTypes, allowed2unique
+
+
+def getAreaSimplifiedGraph(graph, areaCosts):
+  allowedAreaTypes = getAreaTypes(graph)
+  uniqueAreaTypes, allowed2unique = getAreaTypesCostUnique(graph, areaCosts)
+  # simplify graph by collapsing to cost-unique area types
+  newgraph = graph.copy()
+  for node in newgraph.nodes:
+    area = newgraph.nodes[node]["area"]
+    if area in allowedAreaTypes:
+      newgraph.nodes[node]["area"] = allowed2unique[area]
+  return newgraph
+
+
 def addNode(rosnode, areaCosts, nodeDict):
   key = getKey(rosnode.point)
   # NOTE: A previously added point can arrive here again with a different area type sometimes, for some reason. So I just stick to the first node data I get...
@@ -192,7 +232,7 @@ def pathsToMarkerArray(graph, paths, height):
   return markers
 
 
-def graphToNavmesh(graph, navmesh, area2color, alpha=0.5):
+def graphToNavmesh(graph, navmesh, area2color, alpha=0.5, lift=0):
   newnavmesh = newMarker(navmesh.id, navmesh.type, 1, None)
   newnavmesh.color.a = 1.0
   for node in graph.nodes:
@@ -206,7 +246,11 @@ def graphToNavmesh(graph, navmesh, area2color, alpha=0.5):
         roscolor.g = color[1]
         roscolor.b = color[2]
         roscolor.a = alpha
-        newnavmesh.points.append(navmesh.points[i])
+        pt = Point()
+        pt.x = navmesh.points[i].x
+        pt.y = navmesh.points[i].y
+        pt.z = navmesh.points[i].z + lift
+        newnavmesh.points.append(pt)
         newnavmesh.colors.append(roscolor)
   return newnavmesh
 
@@ -1518,27 +1562,6 @@ def optPolyLabelsInPath(graph, areaCosts, allowedAreaTypes, desiredPath, badPath
     A.append(line)
     b.append(1)
 
-  # cost-unique area types
-  if False:
-    rospy.loginfo('Restricting area type changes to single allowed_area_type for each unique area_cost value...')
-    # compute forbidden (cost-repeated) area types
-    uniqueAreaCosts = []
-    forbiddenAreaTypes = []
-    for area in allowedAreaTypes:
-      cost = areaCosts[area]
-      if cost in uniqueAreaCosts:
-        forbiddenAreaTypes.append(area)
-      else:
-        uniqueAreaCosts.append(cost)
-    # set forbidden area types to 0
-    for i in range(len(nodeList)):
-      for j in range(len(allowedAreaTypes)):
-        if allowedAreaTypes[j] in forbiddenAreaTypes:
-          line = [0]*len(nodeLabelsHotEnc)
-          line[len(allowedAreaTypes) * i + j] = 1
-          A.append(line)
-          b.append(0)
-
   # convert
   A = np.array(A)
   b = np.array(b)
@@ -2613,25 +2636,7 @@ def computeExplanationISP(graph, start, goal, area_costs, desired_path, problem_
     return True, [], graph.copy(), 0, [], []
 
   # check area types
-  allowed_area_types = []
-  for node in graph.nodes:
-    area = graph.nodes[node]["area"]
-    if area <= 0:
-      continue
-    if area not in allowed_area_types:
-      allowed_area_types.append(area)
-
-  # cost-unique area types
-  if False:
-    rospy.loginfo('Restricting to single allowed_area_type for each unique area_cost value...')
-    allowed_area_costs = []
-    allowed_area_types2 = []
-    for area in allowed_area_types:
-      cost = area_costs[area]
-      if cost not in allowed_area_costs:
-        allowed_area_costs.append(cost)
-        allowed_area_types2.append(area)
-    allowed_area_types = allowed_area_types2
+  allowed_area_types = getAreaTypes(graph)
 
   # init
   desired_is_shortest = False
@@ -2895,6 +2900,7 @@ if __name__ == "__main__":
   pubPath = rospy.Publisher('graph_path', Marker, queue_size=10)
   pubPathDesired = rospy.Publisher('graph_path_desired', Marker, queue_size=10)
   pubNavmesh = rospy.Publisher('expl_original_navmesh', Marker, queue_size=10)
+  pubNavmeshLines = rospy.Publisher('expl_original_navmesh_lines', Marker, queue_size=10)
 
   rospy.Subscriber("/recast_explanations_interface/contrastive_position", Point, callbackContrastiveWaypoint)
 
@@ -3048,6 +3054,10 @@ if __name__ == "__main__":
 
     rospy.loginfo("Graph |V| = %d, |E| = %d " % (len(G.nodes), len(G.edges)))
 
+    # simplify graph by collapsing to cost-unique area types
+    G_areasimple = getAreaSimplifiedGraph(G, areaCosts)
+    G = G_areasimple
+
     # get navmesh
     rospy.loginfo('Getting navmesh...')
     navmesh = rospy.wait_for_message('/recast_node/navigation_mesh', Marker)
@@ -3172,11 +3182,18 @@ if __name__ == "__main__":
     # saving results for surveys (part 2)
     if xpp_save:
       xpp_wait = 5.0
+      xpp_lift = 0.2
+
+      # get navmesh lines
+      navmesh_lines = rospy.wait_for_message('/recast_node/filtered_navigation_mesh_lines', Marker)
+      for pt in navmesh_lines.points:
+        pt.z += xpp_lift
+      pubNavmeshLines.publish(navmesh_lines)
 
       # query
       pubPathDesired.publish( pathToMarker(G, gpath_desired, 0, [0,1,0,1], 0.3) )
       pubPolyLabelsPath.publish( pathToMarker(G, gpath, 0, [0,0,0,1], 0.4) )
-      pubPolyLabelsNavmesh.publish( graphToNavmesh(G, navmesh, area2color, alpha=1.0) )
+      pubPolyLabelsNavmesh.publish( graphToNavmesh(G, navmesh, area2color, alpha=1.0, lift=xpp_lift) )
       rospy.sleep(xpp_wait)
       os.system('import -window "%s" %s_query.png' % (xpp_rviz, xpp_save_prefix))
 
@@ -3198,13 +3215,13 @@ if __name__ == "__main__":
       ok3, _, G3, _, _, allG3 = computeExplanationISP(G, pstart, pgoal, areaCosts, gpath_desired, "polyLabelsInPath", "ksp", 1, 10, verbose=True, acceptable_dist=0.0)
       xpath3 = nx.shortest_path(G3, source=pstart, target=pgoal, weight="weight")
       pubPolyLabelsPath.publish( pathToMarker(G3, xpath3, 0, [0,0,0,1], 0.4) )
-      pubPolyLabelsNavmesh.publish( graphToNavmesh(G3, navmesh, area2color, alpha=1.0) )
+      pubPolyLabelsNavmesh.publish( graphToNavmesh(G3, navmesh, area2color, alpha=1.0, lift=xpp_lift) )
       rospy.sleep(xpp_wait)
       os.system('import -window "%s" %s_exp_polylabels.png' % (xpp_rviz, xpp_save_prefix))
 
       # all_polylabels explanation
       for i in range(len(allG3)):
-        pubPolyLabelsNavmesh.publish( graphToNavmesh(allG3[i], navmesh, area2color, alpha=1.0) )
+        pubPolyLabelsNavmesh.publish( graphToNavmesh(allG3[i], navmesh, area2color, alpha=1.0, lift=xpp_lift) )
         rospy.sleep(xpp_wait)
         os.system('import -window "%s" %s_exp_all_polylabels_%03d.png' % (xpp_rviz, xpp_save_prefix, i))
       exit()
