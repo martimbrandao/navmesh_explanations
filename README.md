@@ -3,6 +3,7 @@
 ## Objective
 
 Given the shortest path A between a start and goal location on a navigation mesh, this package computes an explanation for why the shortest path is A instead of B (provided by the user).
+The explanation is in the form of a set changes to polygon terrain-types that make B optimal.
 
 ## Citation
 
